@@ -61,6 +61,19 @@ function isAllowed(member) {
     return false;
 }
 
+// ── Tags storage ──────────────────────────────────────────────────────────
+const TAGS_FILE = path.join(__dirname, 'tags.json');
+let tags = new Map();
+if (fs.existsSync(TAGS_FILE)) {
+    try { tags = new Map(JSON.parse(fs.readFileSync(TAGS_FILE, 'utf8'))); }
+    catch (e) { console.error('Failed to load tags:', e.message); }
+} else {
+    fs.writeFileSync(TAGS_FILE, JSON.stringify([]));
+}
+function saveTags() {
+    fs.writeFileSync(TAGS_FILE, JSON.stringify([...tags], null, 2));
+}
+
 // ── ROBLOX HELPERS ───────────────────────────────────────
 let robloxCookie = process.env.ROBLOX_COOKIE;
 let csrfToken = null;
@@ -145,51 +158,69 @@ client.on('messageCreate', async (message) => {
     const args = message.content.split(/ +/);
     const command = args.shift().toLowerCase();
 
-    // ✅ TAG COMMAND
+    // ── .tag — create, view, or delete tags ────────────────────────────────
     if (command === '.tag') {
-        if (!isAllowed(message.member))
-            return message.reply({ embeds: [embed('🚫 Denied', 'Not allowed')] });
+        const subcommand = args[0]?.toLowerCase();
+        const tagName = args[1]?.toLowerCase();
+        const tagContent = args.slice(2).join(' ');
 
-        const username = args[0];
-        const rankInput = args[1];
-
-        if (!username || !rankInput)
-            return message.reply({ embeds: [embed('❌ Usage', '.tag <user> <rank>')] });
-
-        const msg = await message.reply({ embeds: [embed('⏳ Working...', 'Setting rank...')] });
-
-        try {
-            const user = await robloxUsernameToId(username);
-            const roles = await getGroupRoles();
-
-            const role = isNaN(rankInput)
-                ? roles.find(r => r.name.toLowerCase() === rankInput.toLowerCase())
-                : roles.find(r => r.rank == parseInt(rankInput));
-
-            const current = await getGroupMember(user.id);
-
-            await setGroupRank(user.id, role.id);
-
-            await msg.edit({
-                embeds: [embed('✅ Done',
-                    `${user.name}\n${current.role.name} → ${role.name}`)]
-            });
-
-            await sendTagLog(message.guild,
-                `👤 ${message.author.tag}\n🎮 ${user.name}\n📈 ${current.role.name} → ${role.name}`
-            );
-
-        } catch (err) {
-            msg.edit({ embeds: [embed('❌ Error', err.message)] });
+        if (!subcommand) {
+            return message.reply({ embeds: [embed('❌ Usage',
+                '**`.tag create <name> <content>`** — Create a tag\n' +
+                '**`.tag view <name>`** — View a tag\n' +
+                '**`.tag delete <name>`** — Delete a tag (creator or admin only)\n' +
+                '**`.tag list`** — List all tags'
+            )] });
         }
+
+        if (subcommand === 'create') {
+            if (!tagName || !tagContent)
+                return message.reply({ embeds: [embed('❌ Usage', '`.tag create <name> <content>`')] });
+            if (tags.has(tagName))
+                return message.reply({ embeds: [embed('❌ Error', `Tag \`${tagName}\` already exists`)] });
+            tags.set(tagName, { content: tagContent, creator: message.author.id, createdAt: new Date().toISOString() });
+            saveTags();
+            return message.reply({ embeds: [embed('✅ Tag Created', `Tag \`${tagName}\` has been created`)] });
+        }
+
+        if (subcommand === 'view') {
+            if (!tagName)
+                return message.reply({ embeds: [embed('❌ Usage', '`.tag view <name>`')] });
+            const tag = tags.get(tagName);
+            if (!tag)
+                return message.reply({ embeds: [embed('❌ Not Found', `Tag \`${tagName}\` does not exist`)] });
+            return message.reply({ embeds: [embed(`📌 Tag: ${tagName}`, tag.content)] });
+        }
+
+        if (subcommand === 'delete') {
+            if (!tagName)
+                return message.reply({ embeds: [embed('❌ Usage', '`.tag delete <name>`')] });
+            const tag = tags.get(tagName);
+            if (!tag)
+                return message.reply({ embeds: [embed('❌ Not Found', `Tag \`${tagName}\` does not exist`)] });
+            if (tag.creator !== message.author.id && !message.member.permissions.has('Administrator'))
+                return message.reply({ embeds: [embed('🚫 Access Denied', 'Only the tag creator or admins can delete this tag')] });
+            tags.delete(tagName);
+            saveTags();
+            return message.reply({ embeds: [embed('🗑️ Tag Deleted', `Tag \`${tagName}\` has been deleted`)] });
+        }
+
+        if (subcommand === 'list') {
+            if (tags.size === 0)
+                return message.reply({ embeds: [embed('📭 No Tags', 'No tags have been created yet')] });
+            const tagList = [...tags.keys()].map((name, i) => `\`${i + 1}.\` \`${name}\``).join('\n');
+            return message.reply({ embeds: [embed('📌 All Tags', tagList + `\n\n**Total:** ${tags.size} tag${tags.size === 1 ? '' : 's'}`)] });
+        }
+
+        return message.reply({ embeds: [embed('❌ Unknown Subcommand', 'Use: `create`, `view`, `delete`, or `list`')] });
     }
 
-    // ✅ REBOOT
+    // ── .reboot — restart the bot (admin only) ────────────────────────────
     if (command === '.reboot') {
         if (!message.member.permissions.has('Administrator'))
-            return message.reply('Admin only');
-
-        await message.reply('Rebooting...');
+            return message.reply({ embeds: [embed('🚫 Admin Only', 'Only administrators can use this command')] });
+        await message.reply({ embeds: [embed('🔄 Rebooting', 'Bot is restarting...')] });
+        console.log(`[REBOOT] Initiated by ${message.author.tag}`);
         process.exit(0);
     }
 });
@@ -198,54 +229,30 @@ client.on('messageCreate', async (message) => {
 client.once('ready', async () => {
     console.log(`Logged in as ${client.user.tag}`);
 
-    const commands = [
-        new SlashCommandBuilder()
-            .setName('tag')
-            .setDescription('Set Roblox rank')
-            .addStringOption(o => o.setName('username').setRequired(true))
-            .addStringOption(o => o.setName('rank').setRequired(true))
-    ];
+    const tagCommand = new SlashCommandBuilder()
+        .setName('tag')
+        .setDescription('View a tag')
+        .addStringOption(option =>
+            option.setName('name')
+                .setDescription('Tag name to view')
+                .setRequired(true)
+        );
 
     const rest = new REST({ version: '10' }).setToken(TOKEN);
     await rest.put(Routes.applicationCommands(client.user.id), {
-        body: commands.map(c => c.toJSON())
+        body: [tagCommand.toJSON()]
     });
 });
 
 // ── SLASH HANDLER ────────────────────────────────────────
 client.on('interactionCreate', async (interaction) => {
-    if (!interaction.isChatInputCommand()) return;
-
-    if (interaction.commandName === 'tag') {
-        if (!isAllowed(interaction.member))
-            return interaction.reply({ content: 'Not allowed', ephemeral: true });
-
-        const username = interaction.options.getString('username');
-        const rankInput = interaction.options.getString('rank');
-
-        await interaction.deferReply();
-
-        try {
-            const user = await robloxUsernameToId(username);
-            const roles = await getGroupRoles();
-
-            const role = isNaN(rankInput)
-                ? roles.find(r => r.name.toLowerCase() === rankInput.toLowerCase())
-                : roles.find(r => r.rank == parseInt(rankInput));
-
-            const current = await getGroupMember(user.id);
-
-            await setGroupRank(user.id, role.id);
-
-            await interaction.editReply(`✅ ${user.name}: ${current.role.name} → ${role.name}`);
-
-            await sendTagLog(interaction.guild,
-                `👤 ${interaction.user.tag}\n🎮 ${user.name}\n📈 ${current.role.name} → ${role.name}`
-            );
-
-        } catch (err) {
-            interaction.editReply(`❌ ${err.message}`);
+    if (interaction.isChatInputCommand() && interaction.commandName === 'tag') {
+        const tagName = interaction.options.getString('name').toLowerCase();
+        const tag = tags.get(tagName);
+        if (!tag) {
+            return interaction.reply({ embeds: [embed('❌ Not Found', `Tag \`${tagName}\` does not exist`)], ephemeral: true });
         }
+        return interaction.reply({ embeds: [embed(`📌 Tag: ${tagName}`, tag.content)] });
     }
 });
 

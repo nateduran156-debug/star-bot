@@ -2,9 +2,9 @@
   "name": "@workspace/discord-bot",
   "version": "0.0.0",
   "private": true,
-  "main": "bot.js",
+  "main": "star.js",
   "scripts": {
-    "start": "node bot.js"
+    "start": "node star.js"
   },
   "dependencies": {
     "discord.js": "^14.16.3"
