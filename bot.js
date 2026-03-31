@@ -10,9 +10,9 @@ const http = require('http');
 
 const TOKEN   = process.env.DISCORD_BOT_TOKEN;
 const ROLE_ID = process.env.DISCORD_WHITELIST_ROLE_ID;
-const ROBLOX_GROUP_ID = "489845165"; // Updated for FRIDFG
+const ROBLOX_GROUP_ID = "489845165"; // FRIDFG Community
 
-// ── Roblox cookie ─────────────────────────────────────────────────────────
+// ── Roblox cookie — file takes priority over env var ───────────────────────
 const COOKIE_FILE = path.join(__dirname, 'cookie.json');
 let robloxCookie = (() => {
     if (fs.existsSync(COOKIE_FILE)) {
@@ -20,16 +20,15 @@ let robloxCookie = (() => {
     }
     return process.env.ROBLOX_COOKIE || null;
 })();
-
 function saveCookie(value) {
     robloxCookie = value;
     fs.writeFileSync(COOKIE_FILE, JSON.stringify({ cookie: value }), 'utf8');
 }
 
-if (!TOKEN) { console.error('DISCORD_BOT_TOKEN is required'); process.exit(1); }
+if (!TOKEN)   { console.error('DISCORD_BOT_TOKEN is required');   process.exit(1); }
 if (!ROLE_ID) { console.error('DISCORD_WHITELIST_ROLE_ID is required'); process.exit(1); }
 
-// ── Whitelist & Tags Data ──────────────────────────────────────────────────
+// ── Whitelist & Tags Management ───────────────────────────────────────────
 const DATA_FILE = path.join(__dirname, 'whitelist.json');
 const TAGS_FILE = path.join(__dirname, 'tags.json');
 
@@ -37,12 +36,16 @@ let whitelist = new Set();
 if (fs.existsSync(DATA_FILE)) {
     try { whitelist = new Set(JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'))); }
     catch (e) { console.error('Failed to load whitelist:', e.message); }
+} else {
+    fs.writeFileSync(DATA_FILE, JSON.stringify([]));
 }
 
 let customTags = {};
 if (fs.existsSync(TAGS_FILE)) {
     try { customTags = JSON.parse(fs.readFileSync(TAGS_FILE, 'utf8')); }
     catch (e) { console.error('Failed to load tags:', e.message); }
+} else {
+    fs.writeFileSync(TAGS_FILE, JSON.stringify({}));
 }
 
 function saveWhitelist() {
@@ -61,19 +64,34 @@ function isAllowed(member) {
     return false;
 }
 
-// ── Embed helper ───────────────────────────────────────────────────────────
+// ── Logo & Embed helper ────────────────────────────────────────────────────
+const LOGO_PATH = path.join(__dirname, 'assets', 'logo.png');
+const LOGO_NAME = 'logo.png';
+function getLogo() {
+    if (!fs.existsSync(LOGO_PATH)) return null;
+    return new AttachmentBuilder(LOGO_PATH, { name: LOGO_NAME });
+}
+
 const BLUE = 0x1E90FF;
 function embed(title, description) {
-    return new EmbedBuilder()
+    const e = new EmbedBuilder()
         .setColor(BLUE)
         .setTitle(title)
         .setDescription(description)
         .setTimestamp()
         .setFooter({ text: 'made by @averagelarp' });
+    const logo = getLogo();
+    if (logo) {
+        e.setThumbnail(`attachment://${LOGO_NAME}`);
+        e.setFooter({ text: 'made by @averagelarp', iconURL: `attachment://${LOGO_NAME}` });
+    }
+    return e;
 }
 
 async function reply(message, embedOrBuilder, extra = {}) {
-    return message.reply({ embeds: [embedOrBuilder], ...extra });
+    const logo = getLogo();
+    const files = logo ? [logo] : [];
+    return message.reply({ embeds: [embedOrBuilder], files, ...extra });
 }
 
 // ── Roblox API helpers ─────────────────────────────────────────────────────
@@ -84,8 +102,9 @@ async function refreshCsrf() {
         method: 'POST',
         headers: { Cookie: `.ROBLOSECURITY=${robloxCookie}` }
     });
-    csrfToken = res.headers.get('x-csrf-token');
-    return csrfToken;
+    const token = res.headers.get('x-csrf-token');
+    if (token) csrfToken = token;
+    return token;
 }
 
 async function robloxFetch(url, options = {}) {
@@ -111,21 +130,24 @@ async function robloxUsernameToId(username) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ usernames: [username], excludeBannedUsers: false })
     });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     return data.data?.[0] ?? null;
 }
 
-async function getGroupMember(userId) {
-    const res = await fetch(`https://groups.roblox.com/v2/users/${userId}/groups/roles`);
-    const data = await res.json();
-    const entry = (data.data ?? []).find(g => String(g.group.id) === String(ROBLOX_GROUP_ID));
-    return entry ? { role: { name: entry.role.name, rank: entry.role.rank } } : null;
-}
-
 async function getGroupRoles() {
     const res = await fetch(`https://groups.roblox.com/v1/groups/${ROBLOX_GROUP_ID}/roles`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     return data.roles ?? [];
+}
+
+async function getGroupMember(userId) {
+    const res = await fetch(`https://groups.roblox.com/v2/users/${userId}/groups/roles`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    const entry = (data.data ?? []).find(g => String(g.group.id) === String(ROBLOX_GROUP_ID));
+    return entry ? { role: { name: entry.role.name, rank: entry.role.rank, id: entry.role.id } } : null;
 }
 
 async function setGroupRank(userId, roleId) {
@@ -136,7 +158,7 @@ async function setGroupRank(userId, roleId) {
     return res.ok;
 }
 
-// ── Discord Client ─────────────────────────────────────────────────────────
+// ── Discord client ─────────────────────────────────────────────────────────
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
@@ -149,44 +171,46 @@ const client = new Client({
 client.on('messageCreate', async (message) => {
     if (message.author.bot || !message.content.startsWith('.')) return;
 
-    const args = message.content.slice(1).trim().split(/ +/);
+    const args = message.content.trim().split(/ +/);
     const command = args.shift().toLowerCase();
     const member = message.member;
 
-    // ── .tag add/remove & .taglist ───────────────────────
-    if (command === 'tag') {
+    // ── .tag add/remove ──────────────────────
+    if (command === '.tag') {
         if (!isAllowed(member)) return reply(message, embed('🚫 Access Denied', 'Insufficient permissions.'));
         
-        const sub = args[0]?.toLowerCase();
+        const action = args[0]?.toLowerCase();
         const username = args[1];
         const tagText = args.slice(2).join(' ');
 
-        if (!sub || !username) return reply(message, embed('❌ Usage', '`.tag add <user> <text>` or `.tag remove <user>`'));
+        if (!action || !username) return reply(message, embed('❌ Usage', '`.tag add <user> <text>` or \n`.tag remove <user>`'));
 
         const robloxUser = await robloxUsernameToId(username);
         if (!robloxUser) return reply(message, embed('❌ Error', 'Roblox user not found.'));
 
-        if (sub === 'add') {
-            if (!tagText) return reply(message, embed('❌ Error', 'Please provide tag text.'));
+        if (action === 'add') {
+            if (!tagText) return reply(message, embed('❌ Error', 'Please provide the tag text.'));
             customTags[robloxUser.id] = { name: robloxUser.name, tag: tagText };
             saveTags();
             return reply(message, embed('✅ Tag Added', `Added tag \`[${tagText}]\` to **${robloxUser.name}**.`));
-        } 
-        
-        if (sub === 'remove') {
+        } else if (action === 'remove') {
             delete customTags[robloxUser.id];
             saveTags();
-            return reply(message, embed('❌ Tag Removed', `Removed tag from **${robloxUser.name}**.`));
+            return reply(message, embed('❌ Tag Removed', `Removed custom tag from **${robloxUser.name}**.`));
         }
     }
 
-    if (command === 'taglist') {
-        const list = Object.entries(customTags).map(([id, data]) => `**${data.name}** (\`${id}\`): ${data.tag}`).join('\n');
-        return reply(message, embed('📋 Custom Tag List', list || 'No tags set.'));
+    // ── .taglist ────────────────────────────
+    if (command === '.taglist') {
+        const entries = Object.entries(customTags);
+        if (entries.length === 0) return reply(message, embed('📋 Tag List', 'No custom tags have been set yet.'));
+
+        const description = entries.map(([id, data]) => `**${data.name}** (\`${id}\`): \`${data.tag}\``).join('\n');
+        return reply(message, embed('📋 FRIDFG Custom Tags', description));
     }
 
-    // ── .rank ─────────────────────────────────────────────
-    if (command === 'rank') {
+    // ── .rank (updated to show tags) ──────────────────────
+    if (command === '.rank') {
         const username = args[0];
         if (!username) return reply(message, embed('❌ Usage', '`.rank <username>`'));
 
@@ -199,37 +223,48 @@ client.on('messageCreate', async (message) => {
         const tagData = customTags[robloxUser.id];
         const tagInfo = tagData ? `\n**Tag:** [${tagData.tag}]` : "";
 
-        return reply(message, embed('🎖️ Rank Check', `**User:** ${robloxUser.name}\n**Role:** ${mem.role.name} (${mem.role.rank})${tagInfo}`));
+        return reply(message, embed('🎖️ Group Rank', `**User:** ${robloxUser.name}\n**Role:** ${mem.role.name} (${mem.role.rank})${tagInfo}`));
+    }
+
+    // ── .setrank ──────────────────────────────────────────
+    if (command === '.setrank' && isAllowed(member)) {
+        const username = args[0];
+        const rankInput = args[1];
+        if (!username || !rankInput) return reply(message, embed('❌ Usage', '`.setrank <user> <rank_name_or_number>`'));
+
+        const robloxUser = await robloxUsernameToId(username);
+        const roles = await getGroupRoles();
+        const role = roles.find(r => r.rank === parseInt(rankInput) || r.name.toLowerCase() === rankInput.toLowerCase());
+
+        if (!role || !robloxUser) return reply(message, embed('❌ Error', 'Invalid user or role.'));
+
+        await setGroupRank(robloxUser.id, role.id);
+        return reply(message, embed('✅ Success', `Set **${robloxUser.name}** to **${role.name}**.`));
     }
 
     // ── .whitelist ────────────────────────────────────────
-    if (command === 'whitelist' && member.permissions.has('Administrator')) {
+    if (command === '.whitelist' && member.permissions.has('Administrator')) {
         const target = message.mentions.users.first();
         if (!target) return reply(message, embed('❌ Error', 'Mention a user.'));
         whitelist.add(target.id);
         saveWhitelist();
-        return reply(message, embed('✅ Whitelist', `${target.tag} added.`));
+        return reply(message, embed('✅ Whitelisted', `${target.tag} has been added.`));
     }
 });
 
-// ── Slash Commands (Cookie Setup) ──────────────────────────────────────────
 client.once('ready', async () => {
-    console.log(`Logged in as ${client.user.tag}`);
-    const slash = new SlashCommandBuilder().setName('setcookie').setDescription('Update Roblox Cookie').addStringOption(opt => opt.setName('cookie').setDescription('New .ROBLOSECURITY').setRequired(true));
+    console.log(`Bot Ready: ${client.user.tag}`);
     const rest = new REST({ version: '10' }).setToken(TOKEN);
-    await rest.put(Routes.applicationCommands(client.user.id), { body: [slash.toJSON()] });
+    const cmd = new SlashCommandBuilder().setName('setcookie').setDescription('Update Roblox Cookie').addStringOption(o => o.setName('val').setRequired(true).setDescription('Cookie Value'));
+    await rest.put(Routes.applicationCommands(client.user.id), { body: [cmd.toJSON()] });
 });
 
 client.on('interactionCreate', async (interaction) => {
     if (!interaction.isChatInputCommand() || interaction.commandName !== 'setcookie') return;
     if (!interaction.member.permissions.has('Administrator')) return interaction.reply({ content: 'Admin only.', ephemeral: true });
-
-    const newCookie = interaction.options.getString('cookie');
-    saveCookie(newCookie);
-    await interaction.reply({ content: '✅ Cookie updated.', ephemeral: true });
+    saveCookie(interaction.options.getString('val'));
+    return interaction.reply({ content: '✅ Cookie updated.', ephemeral: true });
 });
 
-// Health check server
 http.createServer((req, res) => { res.writeHead(200); res.end('OK'); }).listen(process.env.PORT || 3000);
-
 client.login(TOKEN);
