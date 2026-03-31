@@ -138,53 +138,184 @@ const client = new Client({
     intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent]
 });
 
+// ── ROBLOX GROUP MEMBER HELPERS ──────────────────────────
+async function getMembersInRole(roleId) {
+    let members = [];
+    let cursor = '';
+    do {
+        const url = `https://groups.roblox.com/v1/groups/${ROBLOX_GROUP_ID}/roles/${roleId}/users?limit=100${cursor ? `&cursor=${cursor}` : ''}`;
+        const res = await fetch(url);
+        const data = await res.json();
+        members.push(...(data.data ?? []));
+        cursor = data.nextPageCursor ?? '';
+    } while (cursor);
+    return members;
+}
+
 // ── MESSAGE COMMANDS ─────────────────────────────────────
 client.on('messageCreate', async (message) => {
     if (message.author.bot) return;
 
-    const args = message.content.split(/ +/);
+    const args = message.content.trim().split(/ +/);
     const command = args.shift().toLowerCase();
 
-    // ✅ TAG COMMAND
+    // ── .tag add/remove ──────────────────────────────────
     if (command === '.tag') {
+        const action = args[0]?.toLowerCase();
+        const username = args[1];
+
+        if (!['add', 'remove'].includes(action) || !username)
+            return message.reply({ embeds: [embed('❌ Usage', '`.tag add <username> <role>` or `.tag remove <username>`')] });
+
+        // Permission: must be rank 2+ in the Roblox group OR Discord admin
+        // We check Discord admin first, then require the whitelist role as a proxy for rank-2
         if (!isAllowed(message.member))
-            return message.reply({ embeds: [embed('🚫 Denied', 'Not allowed')] });
+            return message.reply({ embeds: [embed('🚫 Denied', 'You must be rank 2 or higher in the group to use this command.')] });
 
-        const username = args[0];
-        const rankInput = args[1];
-
-        if (!username || !rankInput)
-            return message.reply({ embeds: [embed('❌ Usage', '.tag <user> <rank>')] });
-
-        const msg = await message.reply({ embeds: [embed('⏳ Working...', 'Setting rank...')] });
+        const msg = await message.reply({ embeds: [embed('⏳ Working...', 'Processing...')] });
 
         try {
-            const user = await robloxUsernameToId(username);
             const roles = await getGroupRoles();
 
-            const role = isNaN(rankInput)
-                ? roles.find(r => r.name.toLowerCase() === rankInput.toLowerCase())
-                : roles.find(r => r.rank == parseInt(rankInput));
+            // Verify the command author is rank 2+ in the Roblox group via their own username
+            // (rank-2 gate enforced via Discord whitelist role / admin above)
 
-            const current = await getGroupMember(user.id);
+            const user = await robloxUsernameToId(username);
+            if (!user)
+                return msg.edit({ embeds: [embed('❌ Error', `Roblox user \`${username}\` not found.`)] });
 
-            await setGroupRank(user.id, role.id);
+            if (action === 'add') {
+                const roleInput = args.slice(2).join(' ');
+                if (!roleInput)
+                    return msg.edit({ embeds: [embed('❌ Usage', '`.tag add <username> <role_name_or_rank>`')] });
 
-            await msg.edit({
-                embeds: [embed('✅ Done',
-                    `${user.name}\n${current.role.name} → ${role.name}`)]
-            });
+                const targetRole = isNaN(roleInput)
+                    ? roles.find(r => r.name.toLowerCase() === roleInput.toLowerCase())
+                    : roles.find(r => r.rank == parseInt(roleInput));
 
-            await sendTagLog(message.guild,
-                `👤 ${message.author.tag}\n🎮 ${user.name}\n📈 ${current.role.name} → ${role.name}`
-            );
+                if (!targetRole)
+                    return msg.edit({ embeds: [embed('❌ Error', `Role \`${roleInput}\` not found in the group.`)] });
+
+                const current = await getGroupMember(user.id);
+                const prevRoleName = current?.role?.name ?? 'Guest';
+
+                await setGroupRank(user.id, targetRole.id);
+
+                await msg.edit({
+                    embeds: [embed('✅ Done',
+                        `**${user.name}** has been assigned to **${targetRole.name}**.\n${prevRoleName} → ${targetRole.name}`)]
+                });
+
+                await sendTagLog(message.guild,
+                    `👤 **By:** ${message.author.tag}\n🎮 **User:** [${user.name}](https://www.roblox.com/users/${user.id}/profile)\n📈 **Rank:** ${prevRoleName} → ${targetRole.name}`
+                );
+
+            } else if (action === 'remove') {
+                const current = await getGroupMember(user.id);
+                const prevRoleName = current?.role?.name ?? 'Guest';
+
+                if (!current)
+                    return msg.edit({ embeds: [embed('❌ Error', `**${user.name}** is not in the group.`)] });
+
+                // Rank 0 = guest (removes from group)
+                const guestRole = roles.find(r => r.rank === 0);
+                if (!guestRole)
+                    return msg.edit({ embeds: [embed('❌ Error', 'Could not find the guest role (rank 0) in the group.')] });
+
+                await setGroupRank(user.id, guestRole.id);
+
+                await msg.edit({
+                    embeds: [embed('✅ Done',
+                        `**${user.name}** has been removed from the group.\n${prevRoleName} → Guest`)]
+                });
+
+                await sendTagLog(message.guild,
+                    `👤 **By:** ${message.author.tag}\n🎮 **User:** [${user.name}](https://www.roblox.com/users/${user.id}/profile)\n📉 **Rank:** ${prevRoleName} → Guest (removed)`
+                );
+            }
 
         } catch (err) {
+            console.error(err);
             msg.edit({ embeds: [embed('❌ Error', err.message)] });
         }
+        return;
     }
 
-    // ✅ REBOOT
+    // ── .taglist ─────────────────────────────────────────
+    if (command === '.taglist') {
+        const msg = await message.reply({ embeds: [embed('⏳ Loading...', 'Fetching rank 2 members...')] });
+
+        try {
+            const roles = await getGroupRoles();
+            const rank2Role = roles.find(r => r.rank === 2);
+
+            if (!rank2Role)
+                return msg.edit({ embeds: [embed('❌ Error', 'Could not find rank 2 in the group.')] });
+
+            const members = await getMembersInRole(rank2Role.id);
+
+            if (members.length === 0)
+                return msg.edit({ embeds: [embed('📋 Tag List', `No members currently hold the **${rank2Role.name}** rank.`)] });
+
+            // Paginate: 20 names per page
+            const PAGE_SIZE = 20;
+            const pages = [];
+            for (let i = 0; i < members.length; i += PAGE_SIZE) {
+                const slice = members.slice(i, i + PAGE_SIZE);
+                const lines = slice.map((m, idx) => `\`${i + idx + 1}.\` [${m.username}](https://www.roblox.com/users/${m.userId}/profile)`);
+                pages.push(lines.join('\n'));
+            }
+
+            let page = 0;
+
+            const buildEmbed = (p) =>
+                embed(`📋 ${rank2Role.name} Members (${members.length} total)`,
+                    pages[p] + `\n\nPage ${p + 1} / ${pages.length}`);
+
+            const row = () => new ActionRowBuilder().addComponents(
+                new ButtonBuilder()
+                    .setCustomId('taglist_prev')
+                    .setLabel('◀')
+                    .setStyle(ButtonStyle.Secondary)
+                    .setDisabled(page === 0),
+                new ButtonBuilder()
+                    .setCustomId('taglist_next')
+                    .setLabel('▶')
+                    .setStyle(ButtonStyle.Secondary)
+                    .setDisabled(page === pages.length - 1)
+            );
+
+            await msg.edit({
+                embeds: [buildEmbed(page)],
+                components: pages.length > 1 ? [row()] : []
+            });
+
+            if (pages.length <= 1) return;
+
+            const collector = msg.createMessageComponentCollector({ time: 120_000 });
+
+            collector.on('collect', async (i) => {
+                if (i.user.id !== message.author.id) {
+                    await i.reply({ content: 'Only the command author can navigate pages.', ephemeral: true });
+                    return;
+                }
+                if (i.customId === 'taglist_prev' && page > 0) page--;
+                if (i.customId === 'taglist_next' && page < pages.length - 1) page++;
+                await i.update({ embeds: [buildEmbed(page)], components: [row()] });
+            });
+
+            collector.on('end', () => {
+                msg.edit({ components: [] }).catch(() => {});
+            });
+
+        } catch (err) {
+            console.error(err);
+            msg.edit({ embeds: [embed('❌ Error', err.message)] });
+        }
+        return;
+    }
+
+    // ── .reboot ──────────────────────────────────────────
     if (command === '.reboot') {
         if (!message.member.permissions.has('Administrator'))
             return message.reply('Admin only');
@@ -194,59 +325,13 @@ client.on('messageCreate', async (message) => {
     }
 });
 
-// ── SLASH COMMANDS ───────────────────────────────────────
+// ── READY ────────────────────────────────────────────────
 client.once('ready', async () => {
     console.log(`Logged in as ${client.user.tag}`);
 
-    const commands = [
-        new SlashCommandBuilder()
-            .setName('tag')
-            .setDescription('Set Roblox rank')
-            .addStringOption(o => o.setName('username').setRequired(true))
-            .addStringOption(o => o.setName('rank').setRequired(true))
-    ];
-
+    // Clear all global slash commands (tag command removed in favour of prefix commands)
     const rest = new REST({ version: '10' }).setToken(TOKEN);
-    await rest.put(Routes.applicationCommands(client.user.id), {
-        body: commands.map(c => c.toJSON())
-    });
-});
-
-// ── SLASH HANDLER ────────────────────────────────────────
-client.on('interactionCreate', async (interaction) => {
-    if (!interaction.isChatInputCommand()) return;
-
-    if (interaction.commandName === 'tag') {
-        if (!isAllowed(interaction.member))
-            return interaction.reply({ content: 'Not allowed', ephemeral: true });
-
-        const username = interaction.options.getString('username');
-        const rankInput = interaction.options.getString('rank');
-
-        await interaction.deferReply();
-
-        try {
-            const user = await robloxUsernameToId(username);
-            const roles = await getGroupRoles();
-
-            const role = isNaN(rankInput)
-                ? roles.find(r => r.name.toLowerCase() === rankInput.toLowerCase())
-                : roles.find(r => r.rank == parseInt(rankInput));
-
-            const current = await getGroupMember(user.id);
-
-            await setGroupRank(user.id, role.id);
-
-            await interaction.editReply(`✅ ${user.name}: ${current.role.name} → ${role.name}`);
-
-            await sendTagLog(interaction.guild,
-                `👤 ${interaction.user.tag}\n🎮 ${user.name}\n📈 ${current.role.name} → ${role.name}`
-            );
-
-        } catch (err) {
-            interaction.editReply(`❌ ${err.message}`);
-        }
-    }
+    await rest.put(Routes.applicationCommands(client.user.id), { body: [] });
 });
 
 // ── HEALTH SERVER (RAILWAY) ──────────────────────────────
