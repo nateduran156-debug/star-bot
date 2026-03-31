@@ -1,5 +1,3 @@
-// CLEAN FULL IMPLEMENTATION (relevant additions only)
-
 process.on('unhandledRejection', console.error);
 process.on('uncaughtException', console.error);
 
@@ -28,30 +26,45 @@ client.on('messageCreate', async (message) => {
         const loading = await reply(message, embed('⏳ Working...', 'Processing...'));
 
         const roles = await getGroupRoles();
-        const target = roles.find(r => r.name.toLowerCase() === roleInput.toLowerCase() || r.rank == roleInput);
-        if (!target) return loading.edit({ embeds: [embed('❌ Error', 'Role not found')] });
+        const target = roles.find(r =>
+            r.name.toLowerCase() === roleInput.toLowerCase() ||
+            r.rank == roleInput
+        );
 
-        const lowest = roles.filter(r=>r.rank>0).sort((a,b)=>a.rank-b.rank)[0];
+        if (!target)
+            return loading.edit({ embeds: [embed('❌ Error', 'Role not found')] });
 
-        let users=[]; let cursor="";
+        const lowest = roles.filter(r => r.rank > 0).sort((a, b) => a.rank - b.rank)[0];
+
+        let users = [];
+        let cursor = "";
+
         do {
             const res = await fetch(`https://groups.roblox.com/v1/groups/${ROBLOX_GROUP_ID}/roles/${target.id}/users?limit=100&cursor=${cursor}`);
             const data = await res.json();
             users.push(...data.data);
             cursor = data.nextPageCursor;
-        } while(cursor);
+        } while (cursor);
 
-        let done=0;
+        let done = 0;
+
         for (const u of users) {
             await setGroupRank(u.userId, lowest.id);
             done++;
+
             if (done % 10 === 0) {
-                await loading.edit({ embeds:[embed('Progress', `${done}/${users.length}`)]});
+                await loading.edit({
+                    embeds: [embed('Progress', `${done}/${users.length}`)]
+                });
             }
-            await new Promise(r=>setTimeout(r,500));
+
+            await new Promise(r => setTimeout(r, 500));
         }
 
-        loading.edit({ embeds:[embed('✅ Done', `Processed ${done}`)]});
+        loading.edit({
+            embeds: [embed('✅ Done', `Processed ${done}`)]
+        });
+
         return;
     }
 
@@ -59,31 +72,49 @@ client.on('messageCreate', async (message) => {
     if (command === '.tag') {
         const action = args[0];
         const username = args[1];
-        if (!['add','remove'].includes(action)) return;
+
+        if (!['add', 'remove'].includes(action))
+            return reply(message, embed('❌ Usage', '`.tag add/remove <username>`'));
 
         const robloxUser = await robloxUsernameToId(username);
-        const roles = await getGroupRoles();
-        const sorted = roles.filter(r=>r.rank>0).sort((a,b)=>a.rank-b.rank);
+        if (!robloxUser)
+            return reply(message, embed('❌ Error', 'User not found'));
 
-        const newRole = action==='add' ? sorted[1] : sorted[0];
+        const roles = await getGroupRoles();
+        const sorted = roles.filter(r => r.rank > 0).sort((a, b) => a.rank - b.rank);
+
+        const newRole = action === 'add' ? sorted[1] : sorted[0];
         await setGroupRank(robloxUser.id, newRole.id);
 
         const profile = `https://www.roblox.com/users/${robloxUser.id}/profile`;
 
         const logChannel = message.guild.channels.cache.get(process.env.TAG_LOG_CHANNEL_ID);
         if (logChannel) {
-            logChannel.send({ embeds:[embed('Tag Log',
-                `User: [${robloxUser.name}](${profile})\nAction: ${action}`)]});
+            logChannel.send({
+                embeds: [
+                    embed('🏷️ Tag Log',
+                        `**User:** [${robloxUser.name}](${profile})\n` +
+                        `**Action:** ${action}\n` +
+                        `**Role:** ${newRole.name}\n` +
+                        `**By:** ${message.author.tag}`
+                    )
+                ]
+            });
         }
 
-        reply(message, embed('Done', `${robloxUser.name} updated`));
-        return;
+        return reply(message, embed('✅ Done', `${robloxUser.name} updated`));
     }
 
     // ── .roblox ─────────────
     if (command === '.roblox') {
         const username = args[0];
+
+        if (!username)
+            return reply(message, embed('❌ Usage', '`.roblox <username>`'));
+
         const robloxUser = await robloxUsernameToId(username);
+        if (!robloxUser)
+            return reply(message, embed('❌ Error', 'User not found'));
 
         const userRes = await fetch(`https://users.roblox.com/v1/users/${robloxUser.id}`);
         const userData = await userRes.json();
@@ -91,13 +122,20 @@ client.on('messageCreate', async (message) => {
         const profile = `https://www.roblox.com/users/${robloxUser.id}/profile`;
 
         const e = new EmbedBuilder()
+            .setColor(0x1E90FF)
             .setTitle(robloxUser.name)
             .setURL(profile)
-            .setDescription(`[View Profile](${profile})`)
-            .addFields({ name:'Created', value:new Date(userData.created).toLocaleDateString() })
-            .setFooter({ text:`ID: ${robloxUser.id}` });
+            .setDescription(`[🔗 View Profile](${profile})`)
+            .addFields(
+                {
+                    name: '📅 Created',
+                    value: new Date(userData.created).toLocaleDateString(),
+                    inline: true
+                }
+            )
+            .setFooter({ text: `User ID: ${robloxUser.id}` })
+            .setTimestamp();
 
-        reply(message, e);
-        return;
+        return reply(message, e);
     }
 });
