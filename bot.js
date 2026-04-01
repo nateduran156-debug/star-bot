@@ -45,12 +45,13 @@ function saveAfk(a)   { saveJSON(AFK_FILE, a); }
 
 (function initConfig() {
   if (!fs.existsSync(CONFIG_FILE)) {
-    saveJSON(CONFIG_FILE, { whitelist: [], logChannelId: null, prefix: '.', status: null });
+    saveJSON(CONFIG_FILE, { whitelist: [], ownerwl: [], logChannelId: null, prefix: '.', status: null });
     console.log('created config.json');
   } else {
     const cfg = loadConfig();
     let changed = false;
     if (!Array.isArray(cfg.whitelist)) { cfg.whitelist = []; changed = true; }
+    if (!Array.isArray(cfg.ownerwl))  { cfg.ownerwl  = []; changed = true; }
     if (!cfg.prefix) { cfg.prefix = '.'; changed = true; }
     if (changed) saveConfig(cfg);
   }
@@ -130,9 +131,12 @@ async function rankRobloxUser(robloxUsername, roleId) {
 
 const COMMANDS = [
   { name: '{p}help',                             description: 'Shows this help menu' },
+  { name: '{p}say [message]',                    description: 'Bot sends your message — Owner WL only' },
+  { name: '{p}cs',                               description: 'Clears the screen — Owner WL only' },
+  { name: '{p}s',                                description: 'Snipe the last deleted message' },
   { name: '{p}hb @user [reason]',                description: 'Hardban a user (works by ID, even if they left) — Ban Members' },
-  { name: '{p}reboot',                           description: 'Restart the bot — Whitelist only' },
-  { name: '{p}prefix [new prefix]',              description: 'Change the bot\'s command prefix — Whitelist only' },
+  { name: '{p}reboot',                           description: 'Restart the bot — Owner WL only' },
+  { name: '{p}prefix [new prefix]',              description: 'Change the bot\'s command prefix — Owner WL only' },
   { name: '{p}status [type] [text]',             description: 'Change bot status — playing/watching/listening/competing/custom' },
   { name: '{p}afk [reason]',                     description: 'Set yourself as AFK' },
   { name: '{p}gc [username]',                    description: 'List all Roblox groups a user is in' },
@@ -149,6 +153,9 @@ const COMMANDS = [
   { name: '{p}whitelist add @user',              description: 'Add someone to the bot whitelist' },
   { name: '{p}whitelist remove @user',           description: 'Remove someone from the whitelist' },
   { name: '{p}whitelist list',                   description: 'List all whitelisted users' },
+  { name: '{p}ownerwl add @user',                description: 'Add someone to the owner whitelist' },
+  { name: '{p}ownerwl remove @user',             description: 'Remove someone from the owner whitelist' },
+  { name: '{p}ownerwl list',                     description: 'List all owner whitelisted users' },
 ];
 
 const ITEMS_PER_PAGE = 7;
@@ -210,7 +217,8 @@ function buildGcRow(username, groups, page) {
   );
 }
 
-const gcCache = new Map();
+const gcCache    = new Map();
+const snipeCache = new Map();
 
 client.once('clientReady', () => {
   console.log(`logged in as ${client.user.tag}`);
@@ -230,6 +238,18 @@ function applyStatus(statusData) {
   const type = typeMap[statusData.type] ?? ActivityType.Playing;
   client.user.setActivity({ name: statusData.text, type });
 }
+
+client.on('messageDelete', message => {
+  if (message.author?.bot) return;
+  if (!message.content && !message.attachments.size) return;
+  snipeCache.set(message.channel.id, {
+    content:    message.content || null,
+    author:     message.author?.tag ?? 'Unknown',
+    avatarUrl:  message.author?.displayAvatarURL() ?? null,
+    attachment: message.attachments.first()?.url ?? null,
+    deletedAt:  Date.now()
+  });
+});
 
 client.on('interactionCreate', async interaction => {
   if (!interaction.isButton()) return;
@@ -290,10 +310,17 @@ client.on('messageCreate', async message => {
 
   const cfg2      = loadConfig();
   const whitelist = cfg2.whitelist ?? [];
-  if (!whitelist.includes(message.author.id)) return;
+  const ownerwl   = cfg2.ownerwl   ?? [];
+  const isWl      = whitelist.includes(message.author.id);
+  const isOwner   = ownerwl.includes(message.author.id);
+
+  if (!isWl && !isOwner) return;
 
   const args    = message.content.slice(prefix.length).trim().split(/ +/);
   const command = args.shift().toLowerCase();
+
+  const ownerAllowed = ['gc', 'tag', 'roblox', 'timeout', 'mute', 'unmute', 'say', 'cs', 's'];
+  if (isOwner && !isWl && !ownerAllowed.includes(command)) return;
 
   if (command === 'hb') {
     if (!message.member.permissions.has(PermissionsBitField.Flags.BanMembers))
@@ -341,8 +368,9 @@ client.on('messageCreate', async message => {
   }
 
   if (command === 'prefix') {
-    if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator))
-      return message.reply('You need **Administrator** permission to change the prefix.');
+    const ownerListP = loadConfig().ownerwl ?? [];
+    if (!ownerListP.includes(message.author.id))
+      return message.reply('You need to be on the **Owner Whitelist** to change the prefix.');
 
     const newPrefix = args[0];
     if (!newPrefix)
@@ -392,11 +420,45 @@ client.on('messageCreate', async message => {
     });
   }
 
+  if (command === 'say') {
+    const ownerList = loadConfig().ownerwl ?? [];
+    if (!ownerList.includes(message.author.id))
+      return message.reply({ content: 'You need to be on the **Owner Whitelist** for that.', ephemeral: true });
+    const text = args.join(' ');
+    if (!text) return message.reply('Provide a message to say.');
+    try { await message.delete(); } catch {}
+    await message.channel.send(text);
+    return;
+  }
+
+  if (command === 'cs') {
+    const ownerList = loadConfig().ownerwl ?? [];
+    if (!ownerList.includes(message.author.id))
+      return message.reply({ content: 'You need to be on the **Owner Whitelist** for that.', ephemeral: true });
+    try { await message.delete(); } catch {}
+    await message.channel.send('\n'.repeat(40));
+    return;
+  }
+
+  if (command === 's') {
+    const snipe = snipeCache.get(message.channel.id);
+    if (!snipe) return message.reply('Nothing to snipe in this channel.');
+    const embed = new EmbedBuilder()
+      .setColor(0x2b2d31)
+      .setAuthor({ name: snipe.author, iconURL: snipe.avatarUrl ?? undefined })
+      .setTimestamp(snipe.deletedAt)
+      .setFooter({ text: `Deleted` });
+    if (snipe.content) embed.setDescription(snipe.content);
+    if (snipe.attachment) embed.setImage(snipe.attachment);
+    return message.reply({ embeds: [embed] });
+  }
+
   if (command === 'reboot') {
-    if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator))
-      return message.reply('You need **Administrator** permission.');
+    const ownerList = loadConfig().ownerwl ?? [];
+    if (!ownerList.includes(message.author.id))
+      return message.reply('You need to be on the **Owner Whitelist** for that.');
     await message.reply('Rebooting...');
-    process.exit(0);
+    process.exit(1);
   }
 
   if (command === 'tag') {
