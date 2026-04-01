@@ -460,7 +460,7 @@ client.on('messageCreate', async (message) => {
     }
 
     // ── Whitelist guard (Roblox / rank commands) ───────────
-    const restricted = ['.groups', '.rank', '.setrank', '.roles'];
+    const restricted = ['.groups', '.rank', '.tag', '.roles'];
     if (restricted.includes(command) && !isAllowed(member)) {
         return reply(message, embed('🚫 Access Denied', 'You are not whitelisted to use this command'));
     }
@@ -707,8 +707,8 @@ client.on('messageCreate', async (message) => {
         return;
     }
 
-    // ── .setrank — set a user's rank ───────────────────────
-    if (command === '.setrank') {
+    // ── .tag — set a user's rank ───────────────────────
+    if (command === '.tag') {
         if (!ROBLOX_GROUP_ID || !robloxCookie)
             return reply(message, embed('❌ Not Configured', 'Roblox group credentials are not set up'));
 
@@ -717,7 +717,7 @@ client.on('messageCreate', async (message) => {
 
         if (!username || !rankInput)
             return reply(message, embed('❌ Usage',
-                '`.setrank <roblox_username> <role_name_or_rank_number>`\n\nUse `.roles` to see available roles'));
+                '`.tag <roblox_username> <role_name_or_rank_number>`\n\nUse `.roles` to see available roles'));
 
         const loading = await reply(message, embed('⏳ Working...', `Setting rank for **${username}**...`));
 
