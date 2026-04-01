@@ -184,7 +184,7 @@ function buildHelpRow(page) {
   );
 }
 
-client.on('ready'
+client.once('clientReady', () => {
   console.log(`logged in as ${client.user.tag}`);
   const cfg = loadConfig();
   if (cfg.status) applyStatus(cfg.status);
