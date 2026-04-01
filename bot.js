@@ -42,6 +42,21 @@ function saveHushed(h) { saveJSON(HUSHED_FILE, h); }
 function loadConfig()  { return loadJSON(CONFIG_FILE); }
 function saveConfig(c) { saveJSON(CONFIG_FILE, c); }
 
+// ─── Initialize config.json on startup (ensures whitelist always persists) ───
+
+(function initConfig() {
+  if (!fs.existsSync(CONFIG_FILE)) {
+    saveJSON(CONFIG_FILE, { whitelist: [], logChannelId: null });
+    console.log('📁 Created config.json for persistent storage.');
+  } else {
+    const cfg = loadConfig();
+    if (!Array.isArray(cfg.whitelist)) {
+      cfg.whitelist = [];
+      saveConfig(cfg);
+    }
+  }
+})();
+
 // ─── Send to log channel ──────────────────────────────────────────────────────
 
 async function sendLog(guild, embed) {
@@ -66,6 +81,7 @@ const COMMANDS = [
   { name: '.tag [robloxUser] [tagname]',         description: 'Rank a Roblox user using the role ID stored in a tag — Manage Messages' },
   { name: '.tags [name]',                        description: 'Display a saved tag by name (spaces supported, e.g. .tags susano tag)' },
   { name: '.roblox [username]',                  description: 'Roblox profile: avatar, creation date, profile & game buttons' },
+  { name: '.groups [username]',                  description: 'List all Roblox groups a user is a member of, with their role in each' },
   { name: '.ban @user [reason]',                 description: 'Ban a member — Ban Members' },
   { name: '.grouproles',                         description: 'List all Roblox group roles with their IDs (use these IDs in tags)' },
   { name: '.hush @user',                         description: 'Toggle hush on a user — every message they send is auto-deleted — Manage Messages' },
@@ -372,6 +388,60 @@ client.on('messageCreate', async (message) => {
         )]
       });
     } catch { return message.reply('❌ Failed to fetch Roblox profile. Try again later.'); }
+  }
+
+  // .groups
+  if (command === 'groups') {
+    const username = args[0];
+    if (!username) return message.reply('❌ Usage: `.groups [username]`');
+    try {
+      const lookupRes = await fetch('https://users.roblox.com/v1/usernames/users', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ usernames: [username], excludeBannedUsers: false })
+      });
+      const userBasic = (await lookupRes.json()).data?.[0];
+      if (!userBasic) return message.reply(`❌ Roblox user **${username}** not found.`);
+      const userId = userBasic.id;
+
+      const groupsRes  = await fetch(`https://groups.roblox.com/v1/users/${userId}/groups/roles`);
+      const groupsData = await groupsRes.json();
+      const groups     = groupsData.data ?? [];
+
+      if (!groups.length) {
+        return message.reply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle(`👥 Groups — ${userBasic.name}`)
+              .setColor(0x5865F2)
+              .setDescription('This user is not a member of any Roblox groups.')
+              .setTimestamp()
+          ]
+        });
+      }
+
+      const avatarUrl = (await (await fetch(`https://thumbnails.roblox.com/v1/users/avatar?userIds=${userId}&size=420x420&format=Png&isCircular=false`)).json()).data?.[0]?.imageUrl;
+
+      const GROUPS_PER_EMBED = 25;
+      const sorted = groups.sort((a, b) => a.group.name.localeCompare(b.group.name));
+      const lines  = sorted.map(g => `**${g.group.name}**\n> Role: \`${g.role.name}\`  •  Rank: \`${g.role.rank}\`  •  Group ID: \`${g.group.id}\``);
+
+      const embeds = [];
+      for (let i = 0; i < lines.length; i += GROUPS_PER_EMBED) {
+        const slice = lines.slice(i, i + GROUPS_PER_EMBED);
+        const embed = new EmbedBuilder()
+          .setColor(0x5865F2)
+          .setDescription(slice.join('\n\n'))
+          .setTimestamp();
+        if (i === 0) {
+          embed.setTitle(`👥 Groups — ${userBasic.name}`);
+          if (avatarUrl) embed.setThumbnail(avatarUrl);
+          embed.setFooter({ text: `${groups.length} group(s) total  •  User ID: ${userId}` });
+        }
+        embeds.push(embed);
+      }
+
+      return message.reply({ embeds });
+    } catch { return message.reply('❌ Failed to fetch Roblox groups. Try again later.'); }
   }
 
   // .ban
