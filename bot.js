@@ -8,9 +8,10 @@ const fs = require('fs');
 const path = require('path');
 const http = require('http');
 
-const TOKEN   = process.env.DISCORD_BOT_TOKEN;
-const ROLE_ID = process.env.DISCORD_WHITELIST_ROLE_ID;
-const ROBLOX_GROUP_ID = process.env.ROBLOX_GROUP_ID;
+const TOKEN            = process.env.DISCORD_BOT_TOKEN;
+const ROLE_ID          = process.env.DISCORD_WHITELIST_ROLE_ID;
+const ROBLOX_GROUP_ID  = process.env.ROBLOX_GROUP_ID;
+const TAG_LOG_CHANNEL_ID = process.env.TAG_LOG_CHANNEL_ID || null;
 
 // ── Roblox cookie — file takes priority over env var ───────────────────────
 const COOKIE_FILE = path.join(__dirname, 'cookie.json');
@@ -460,7 +461,7 @@ client.on('messageCreate', async (message) => {
     }
 
     // ── Whitelist guard (Roblox / rank commands) ───────────
-    const restricted = ['.groups', '.rank', '.tag', '.roles'];
+    const restricted = ['.groups', '.rank', '.tag', '.roles', '.striprole', '.roblox'];
     if (restricted.includes(command) && !isAllowed(member)) {
         return reply(message, embed('🚫 Access Denied', 'You are not whitelisted to use this command'));
     }
@@ -707,17 +708,21 @@ client.on('messageCreate', async (message) => {
         return;
     }
 
-    // ── .tag — set a user's rank ───────────────────────
+    // ── .tag — set a user's rank (supports spaces in username) ───────────
     if (command === '.tag') {
         if (!ROBLOX_GROUP_ID || !robloxCookie)
             return reply(message, embed('❌ Not Configured', 'Roblox group credentials are not set up'));
 
-        const username  = args[0];
-        const rankInput = args[1];
+        // Format: .tag <action_or_rank> <username with spaces>
+        // action = args[0], username = rest joined
+        const rankInput = args[0];
+        const username  = args.slice(1).join(' ');
 
-        if (!username || !rankInput)
+        if (!rankInput || !username)
             return reply(message, embed('❌ Usage',
-                '`.tag <roblox_username> <role_name_or_rank_number>`\n\nUse `.roles` to see available roles'));
+                '`.tag <role_name_or_rank_number> <roblox username>`\n\n' +
+                'Usernames with spaces are supported.\nUse `.roles` to see available roles.\n\n' +
+                '*Example: `.tag Senior Member susano tag`*'));
 
         const loading = await reply(message, embed('⏳ Working...', `Setting rank for **${username}**...`));
 
@@ -753,9 +758,103 @@ client.on('messageCreate', async (message) => {
                     `**${currentMember.role.name}** → **${targetRole.name}** (Rank ${targetRole.rank})`)]
             });
 
-            console.log(`[SETRANK] ${message.author.tag} set ${robloxUser.name} to ${targetRole.name} (rank ${targetRole.rank})`);
+            console.log(`[TAG] ${message.author.tag} set ${robloxUser.name} to ${targetRole.name} (rank ${targetRole.rank})`);
+
+            // ── Log to TAG_LOG_CHANNEL_ID ──────────────────────────────────
+            if (TAG_LOG_CHANNEL_ID) {
+                try {
+                    const logChannel = await client.channels.fetch(TAG_LOG_CHANNEL_ID).catch(() => null);
+                    if (logChannel) {
+                        // Fetch avatar thumbnail from Roblox
+                        let avatarUrl = null;
+                        try {
+                            const thumbRes = await fetch(
+                                `https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds=${robloxUser.id}&size=150x150&format=Png&isCircular=false`
+                            );
+                            if (thumbRes.ok) {
+                                const thumbData = await thumbRes.json();
+                                avatarUrl = thumbData.data?.[0]?.imageUrl ?? null;
+                            }
+                        } catch {}
+
+                        // Fetch join date
+                        let joinDate = null;
+                        try {
+                            const userRes = await fetch(`https://users.roblox.com/v1/users/${robloxUser.id}`);
+                            if (userRes.ok) {
+                                const userData = await userRes.json();
+                                joinDate = userData.created ? new Date(userData.created) : null;
+                            }
+                        } catch {}
+
+                        const logEmbed = new EmbedBuilder()
+                            .setColor(BLUE)
+                            .setTitle('🏷️ Tag Applied')
+                            .setDescription(
+                                `**Roblox User:** [${robloxUser.name}](https://www.roblox.com/users/${robloxUser.id}/profile)\n` +
+                                `**Previous Rank:** ${currentMember.role.name}\n` +
+                                `**New Rank:** ${targetRole.name} (Rank ${targetRole.rank})\n` +
+                                `**Tagged by:** ${message.author.tag}\n` +
+                                (joinDate ? `**Roblox Join Date:** <t:${Math.floor(joinDate.getTime() / 1000)}:D>\n` : '')
+                            )
+                            .setTimestamp()
+                            .setFooter({ text: 'made by @averagelarp' });
+
+                        if (avatarUrl) logEmbed.setThumbnail(avatarUrl);
+
+                        await logChannel.send({ embeds: [logEmbed] });
+                    }
+                } catch (logErr) {
+                    console.error('Tag log error:', logErr);
+                }
+            }
         } catch (err) {
-            console.error('Setrank error:', err);
+            console.error('Tag error:', err);
+            loading.edit({ embeds: [embed('❌ Error', `Failed: ${err.message}`)] });
+        }
+        return;
+    }
+
+    // ── .striprole — remove a user from the Roblox group (set to guest) ───
+    if (command === '.striprole') {
+        if (!ROBLOX_GROUP_ID || !robloxCookie)
+            return reply(message, embed('❌ Not Configured', 'Roblox group credentials are not set up'));
+
+        const username = args.join(' ');
+        if (!username)
+            return reply(message, embed('❌ Usage',
+                '`.striprole <roblox username>`\n\nRemoves the user\'s rank in the group (sets to guest/rank 0).\nUsernames with spaces are supported.'));
+
+        const loading = await reply(message, embed('⏳ Working...', `Stripping role for **${username}**...`));
+
+        try {
+            const robloxUser = await robloxUsernameToId(username);
+            if (!robloxUser)
+                return loading.edit({ embeds: [embed('❌ Not Found', `No Roblox user: **${username}**`)] });
+
+            const currentMember = await getGroupMember(robloxUser.id);
+            if (!currentMember)
+                return loading.edit({
+                    embeds: [embed('📭 Not in Group', `**${robloxUser.name}** is not a member of this group`)]
+                });
+
+            const groupRoles = await getGroupRoles();
+            // Rank 0 is the guest/no-rank role — find the lowest non-zero rank as fallback
+            const guestRole = groupRoles.find(r => r.rank === 0) ?? groupRoles.sort((a, b) => a.rank - b.rank)[0];
+            if (!guestRole)
+                return loading.edit({ embeds: [embed('❌ Error', 'Could not find a guest/base role to assign')] });
+
+            await setGroupRank(robloxUser.id, guestRole.id);
+
+            await loading.edit({
+                embeds: [embed('🗑️ Role Stripped',
+                    `**${robloxUser.name}**\n` +
+                    `Removed from rank **${currentMember.role.name}** → **${guestRole.name}**`)]
+            });
+
+            console.log(`[STRIPROLE] ${message.author.tag} stripped ${robloxUser.name} (was ${currentMember.role.name})`);
+        } catch (err) {
+            console.error('Striprole error:', err);
             loading.edit({ embeds: [embed('❌ Error', `Failed: ${err.message}`)] });
         }
         return;
@@ -847,6 +946,100 @@ client.on('messageCreate', async (message) => {
         } catch (err) {
             console.error('Demote error:', err);
             loading.edit({ embeds: [embed('❌ Error', `Failed: ${err.message}`)] });
+        }
+        return;
+    }
+
+    // ── .reboot — restart the bot process (admin only) ────
+    if (command === '.reboot') {
+        if (!member.permissions.has('Administrator'))
+            return reply(message, embed('🚫 Admin Only', 'Only administrators can use `.reboot`'));
+
+        await reply(message, embed('🔄 Rebooting', 'Bot is restarting... be right back!'));
+        console.log(`[REBOOT] Triggered by ${message.author.tag}`);
+        process.exit(0);
+    }
+
+    // ── .roblox — rich Roblox profile lookup ──────────────
+    if (command === '.roblox') {
+        const username = args.join(' ');
+        if (!username)
+            return reply(message, embed('❌ Usage',
+                '`.roblox <roblox username>`\n\nUsernames with spaces are supported.\n*Example: `.roblox susano tag`*'));
+
+        const loading = await reply(message, embed('⏳ Fetching...', `Looking up **${username}** on Roblox...`));
+
+        try {
+            const robloxUser = await robloxUsernameToId(username);
+            if (!robloxUser)
+                return loading.edit({ embeds: [embed('❌ Not Found', `No Roblox user found for **${username}**`)] });
+
+            const userId = robloxUser.id;
+
+            // Fetch full user profile
+            const [userRes, friendsRes, followersRes, followingRes, groupsRes, thumbRes] = await Promise.allSettled([
+                fetch(`https://users.roblox.com/v1/users/${userId}`),
+                fetch(`https://friends.roblox.com/v1/users/${userId}/friends/count`),
+                fetch(`https://friends.roblox.com/v1/users/${userId}/followers/count`),
+                fetch(`https://friends.roblox.com/v1/users/${userId}/followings/count`),
+                fetch(`https://groups.roblox.com/v2/users/${userId}/groups/roles`),
+                fetch(`https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds=${userId}&size=150x150&format=Png&isCircular=false`)
+            ]);
+
+            const userProfile  = userRes.status  === 'fulfilled' && userRes.value.ok  ? await userRes.value.json()  : null;
+            const friendsData  = friendsRes.status  === 'fulfilled' && friendsRes.value.ok  ? await friendsRes.value.json()  : null;
+            const followersData = followersRes.status === 'fulfilled' && followersRes.value.ok ? await followersRes.value.json() : null;
+            const followingData = followingRes.status === 'fulfilled' && followingRes.value.ok ? await followingRes.value.json() : null;
+            const groupsData   = groupsRes.status   === 'fulfilled' && groupsRes.value.ok   ? await groupsRes.value.json()   : null;
+            const thumbData    = thumbRes.status    === 'fulfilled' && thumbRes.value.ok    ? await thumbRes.value.json()    : null;
+
+            const displayName = userProfile?.displayName ?? robloxUser.name;
+            const description = userProfile?.description?.trim() || null;
+            const avatarUrl   = thumbData?.data?.[0]?.imageUrl ?? null;
+
+            // Join date & account age
+            let joinLine = '';
+            if (userProfile?.created) {
+                const joined = new Date(userProfile.created);
+                const ageMs  = Date.now() - joined.getTime();
+                const ageDays = Math.floor(ageMs / 86400000);
+                const ageYears = (ageDays / 365).toFixed(1);
+                joinLine = `**Joined:** <t:${Math.floor(joined.getTime() / 1000)}:D> *(${ageYears} years ago)*\n`;
+            }
+
+            // Groups list (up to 10)
+            const groups = (groupsData?.data ?? [])
+                .map(g => `• [${g.group.name}](https://www.roblox.com/groups/${g.group.id}) — *${g.role.name}*`)
+                .slice(0, 10);
+            const groupsLine = groups.length > 0
+                ? `\n**Groups (${groupsData.data.length}):**\n${groups.join('\n')}${groupsData.data.length > 10 ? `\n*...and ${groupsData.data.length - 10} more*` : ''}`
+                : '\n**Groups:** *None / private*';
+
+            // Social counts
+            const friends   = friendsData?.count  ?? '?';
+            const followers = followersData?.count ?? '?';
+            const following = followingData?.count ?? '?';
+
+            const profileEmbed = new EmbedBuilder()
+                .setColor(BLUE)
+                .setTitle(`🎮 ${displayName} (@${robloxUser.name})`)
+                .setURL(`https://www.roblox.com/users/${userId}/profile`)
+                .setDescription(
+                    (description ? `*${description.slice(0, 200)}${description.length > 200 ? '...' : ''}*\n\n` : '') +
+                    `${joinLine}` +
+                    `**Friends:** ${friends}  •  **Followers:** ${followers}  •  **Following:** ${following}\n` +
+                    `**Profile:** [View on Roblox](https://www.roblox.com/users/${userId}/profile)` +
+                    groupsLine
+                )
+                .setTimestamp()
+                .setFooter({ text: 'made by @averagelarp' });
+
+            if (avatarUrl) profileEmbed.setThumbnail(avatarUrl);
+
+            await loading.edit({ embeds: [profileEmbed] });
+        } catch (err) {
+            console.error('Roblox lookup error:', err);
+            loading.edit({ embeds: [embed('❌ Error', `Failed to fetch profile: ${err.message}`)] });
         }
         return;
     }
