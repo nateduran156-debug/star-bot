@@ -13,6 +13,71 @@ const {
 } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
+const { Pool } = require('pg');
+
+// ── Postgres connection pool ──────────────────────────────────────────────────
+const pool = process.env.DATABASE_URL
+  ? new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } })
+  : null;
+
+if (!pool) console.warn('[db] DATABASE_URL not set — tag persistence disabled');
+
+async function initializeDatabase() {
+  if (!pool) return;
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS tagged_users (
+        id              SERIAL PRIMARY KEY,
+        roblox_user_id  TEXT        NOT NULL,
+        roblox_username TEXT        NOT NULL,
+        rank_id         TEXT        NOT NULL,
+        rank_name       TEXT        NOT NULL DEFAULT '',
+        discord_user_id TEXT        NOT NULL,
+        tagged_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS tagged_users_roblox_user_id_idx
+        ON tagged_users (roblox_user_id);
+    `);
+    console.log('[db] tagged_users table ready');
+  } catch (err) {
+    console.error('[db] failed to initialise database:', err.message);
+  }
+}
+
+async function saveTagToDb({ robloxUserId, robloxUsername, rankId, rankName, discordUserId }) {
+  if (!pool) return;
+  try {
+    await pool.query(
+      `INSERT INTO tagged_users
+         (roblox_user_id, roblox_username, rank_id, rank_name, discord_user_id, tagged_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+       ON CONFLICT (roblox_user_id) DO UPDATE SET
+         roblox_username = EXCLUDED.roblox_username,
+         rank_id         = EXCLUDED.rank_id,
+         rank_name       = EXCLUDED.rank_name,
+         discord_user_id = EXCLUDED.discord_user_id,
+         updated_at      = NOW()`,
+      [String(robloxUserId), robloxUsername, String(rankId), rankName, String(discordUserId)]
+    );
+  } catch (err) {
+    console.error('[db] failed to save tag:', err.message);
+  }
+}
+
+async function restoreTagsFromDb() {
+  if (!pool) return [];
+  try {
+    const { rows } = await pool.query(
+      'SELECT * FROM tagged_users ORDER BY updated_at DESC'
+    );
+    return rows;
+  } catch (err) {
+    console.error('[db] failed to fetch tags:', err.message);
+    return [];
+  }
+}
+// ─────────────────────────────────────────────────────────────────────────────
 
 const client = new Client({
   intents: [
@@ -157,6 +222,7 @@ const COMMANDS = [
   { name: '{p}unlock' },
   { name: '{p}say [text]' },
   { name: '{p}cs' },
+  { name: '{p}restore' },
 ];
 
 const ITEMS_PER_PAGE = 7;
@@ -284,6 +350,7 @@ const slashCommands = [
         { name: 'list',   value: 'list'   }
       ))
     .addUserOption(o => o.setName('user').setDescription('user (for add/remove)').setRequired(false)),
+  new SlashCommandBuilder().setName('restore').setDescription('re-apply all saved tags from the database (admin only)').setDMPermission(true),
 ].map(c => c.toJSON());
 
 function applyStatus(statusData) {
@@ -303,6 +370,25 @@ client.once('clientReady', async () => {
   console.log(`logged in as ${client.user.tag}`);
   const cfg = loadConfig();
   if (cfg.status) applyStatus(cfg.status);
+
+  await initializeDatabase();
+
+  // Auto-restore all saved tags on startup
+  const savedTags = await restoreTagsFromDb();
+  if (savedTags.length > 0) {
+    console.log(`[db] restoring ${savedTags.length} tagged user(s) on startup...`);
+    let ok = 0, fail = 0;
+    for (const row of savedTags) {
+      try {
+        await rankRobloxUser(row.roblox_username, row.rank_id);
+        ok++;
+      } catch (err) {
+        fail++;
+        console.warn(`[db] restore failed for ${row.roblox_username}: ${err.message}`);
+      }
+    }
+    console.log(`[db] startup restore complete — ${ok} ok, ${fail} failed`);
+  }
 
   const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
   try {
@@ -750,6 +836,15 @@ client.on('interactionCreate', async interaction => {
         if (result.avatarUrl) embed.setThumbnail(result.avatarUrl);
         await interaction.editReply({ embeds: [embed] });
 
+        // Persist tag to database
+        await saveTagToDb({
+          robloxUserId:  result.userId,
+          robloxUsername: result.displayName,
+          rankId:        roleId,
+          rankName:      name,
+          discordUserId: interaction.user.id
+        });
+
         if (!inDM) {
           const logEmbed = new EmbedBuilder()
             .setTitle('rank log')
@@ -776,6 +871,68 @@ client.on('interactionCreate', async interaction => {
     }
 
     return interaction.reply({ content: 'give me a content (to create tag) or a robloxuser (to rank)', ephemeral: true });
+  }
+
+  // restore — admin only, re-applies all saved tags from the database
+  if (commandName === 'restore') {
+    const WHITELIST_MANAGERS = ['1461174388006326354', '1472482602215538779'];
+    if (!WHITELIST_MANAGERS.includes(interaction.user.id))
+      return interaction.reply({ content: "ur not allowed to run restore", ephemeral: true });
+
+    if (!pool)
+      return interaction.reply({ content: 'database not connected — `DATABASE_URL` is not set', ephemeral: true });
+
+    await interaction.deferReply();
+    const rows = await restoreTagsFromDb();
+    if (!rows.length)
+      return interaction.editReply({ embeds: [new EmbedBuilder().setColor(0x2b2d31).setDescription('no saved tags in the database')] });
+
+    const total = rows.length;
+    let ok = 0, fail = 0;
+    const failures = [];
+
+    const progressBar = (done, total) => {
+      const filled = Math.round((done / total) * 10);
+      return `[${'█'.repeat(filled)}${'░'.repeat(10 - filled)}] ${done}/${total}`;
+    };
+
+    const statusMsg = await interaction.editReply({
+      embeds: [new EmbedBuilder().setColor(0x2b2d31).setDescription(`restoring tags...\n${progressBar(0, total)}`)]
+    });
+
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      try {
+        await rankRobloxUser(row.roblox_username, row.rank_id);
+        ok++;
+      } catch (err) {
+        fail++;
+        failures.push(`**${row.roblox_username}** — ${err.message}`);
+      }
+      // Update progress every 5 users or on the last one
+      if ((i + 1) % 5 === 0 || i === rows.length - 1) {
+        await interaction.editReply({
+          embeds: [new EmbedBuilder().setColor(0x2b2d31).setDescription(`restoring tags...\n${progressBar(i + 1, total)}`)]
+        }).catch(() => {});
+      }
+    }
+
+    const resultEmbed = new EmbedBuilder()
+      .setTitle('restore complete')
+      .setColor(fail === 0 ? 0x57f287 : ok === 0 ? 0xed4245 : 0xfee75c)
+      .addFields(
+        { name: 'total',   value: `${total}`, inline: true },
+        { name: 'success', value: `${ok}`,    inline: true },
+        { name: 'failed',  value: `${fail}`,  inline: true }
+      )
+      .setTimestamp();
+
+    if (failures.length) {
+      const failText = failures.slice(0, 10).join('\n') + (failures.length > 10 ? `\n…and ${failures.length - 10} more` : '');
+      resultEmbed.addFields({ name: 'failures', value: failText });
+    }
+
+    return interaction.editReply({ embeds: [resultEmbed] });
   }
 
   if (commandName === 'reboot') {
@@ -1172,6 +1329,15 @@ client.on('messageCreate', async message => {
       if (result.avatarUrl) embed.setThumbnail(result.avatarUrl);
       await status.edit({ content: '', embeds: [embed] });
 
+      // Persist tag to database
+      await saveTagToDb({
+        robloxUserId:  result.userId,
+        robloxUsername: result.displayName,
+        rankId:        roleId,
+        rankName:      tagName,
+        discordUserId: message.author.id
+      });
+
       const logEmbed = new EmbedBuilder()
         .setTitle('rank log')
         .setColor(0x5865f2)
@@ -1485,6 +1651,67 @@ client.on('messageCreate', async message => {
 
   if (command === 'help') {
     return message.reply({ embeds: [buildHelpEmbed(0)], components: [buildHelpRow(0)] });
+  }
+
+  // restore — admin only, re-applies all saved tags from the database
+  if (command === 'restore') {
+    const WHITELIST_MANAGERS = ['1461174388006326354', '1472482602215538779'];
+    if (!WHITELIST_MANAGERS.includes(message.author.id))
+      return message.reply("ur not allowed to run restore");
+
+    if (!pool)
+      return message.reply('database not connected — `DATABASE_URL` is not set');
+
+    const rows = await restoreTagsFromDb();
+    if (!rows.length)
+      return message.reply({ embeds: [new EmbedBuilder().setColor(0x2b2d31).setDescription('no saved tags in the database')] });
+
+    const total = rows.length;
+    let ok = 0, fail = 0;
+    const failures = [];
+
+    const progressBar = (done, total) => {
+      const filled = Math.round((done / total) * 10);
+      return `[${'█'.repeat(filled)}${'░'.repeat(10 - filled)}] ${done}/${total}`;
+    };
+
+    const statusMsg = await message.reply({
+      embeds: [new EmbedBuilder().setColor(0x2b2d31).setDescription(`restoring tags...\n${progressBar(0, total)}`)]
+    });
+
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      try {
+        await rankRobloxUser(row.roblox_username, row.rank_id);
+        ok++;
+      } catch (err) {
+        fail++;
+        failures.push(`**${row.roblox_username}** — ${err.message}`);
+      }
+      // Update progress every 5 users or on the last one
+      if ((i + 1) % 5 === 0 || i === rows.length - 1) {
+        await statusMsg.edit({
+          embeds: [new EmbedBuilder().setColor(0x2b2d31).setDescription(`restoring tags...\n${progressBar(i + 1, total)}`)]
+        }).catch(() => {});
+      }
+    }
+
+    const resultEmbed = new EmbedBuilder()
+      .setTitle('restore complete')
+      .setColor(fail === 0 ? 0x57f287 : ok === 0 ? 0xed4245 : 0xfee75c)
+      .addFields(
+        { name: 'total',   value: `${total}`, inline: true },
+        { name: 'success', value: `${ok}`,    inline: true },
+        { name: 'failed',  value: `${fail}`,  inline: true }
+      )
+      .setTimestamp();
+
+    if (failures.length) {
+      const failText = failures.slice(0, 10).join('\n') + (failures.length > 10 ? `\n…and ${failures.length - 10} more` : '');
+      resultEmbed.addFields({ name: 'failures', value: failText });
+    }
+
+    return statusMsg.edit({ embeds: [resultEmbed] });
   }
 });
 
