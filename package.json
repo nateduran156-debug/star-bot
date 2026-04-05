@@ -1,12 +1,18 @@
 {
-  "name": "fraid-bot",
+  "name": "sins-bot",
   "version": "1.0.0",
+  "description": "Discord bot",
   "type": "module",
-  "main": "bot.js",
+  "main": "bot_1775430610863_1775431468428.js",
   "scripts": {
-    "start": "node bot.js"
+    "start": "node bot_1775430610863_1775431468428.js"
   },
   "dependencies": {
-    "discord.js": "^14.16.3"
+    "canvas": "^3.2.3",
+    "discord.js": "^14.18.0",
+    "gifencoder": "^2.0.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
