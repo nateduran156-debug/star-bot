@@ -3,9 +3,9 @@
   "version": "1.0.0",
   "description": "Discord bot",
   "type": "module",
-  "main": "bot_1775430610863_1775431468428.js",
+  "main": "bot.js",
   "scripts": {
-    "start": "node bot_1775430610863_1775431468428.js"
+    "start": "node bot.js"
   },
   "dependencies": {
     "canvas": "^3.2.3",
