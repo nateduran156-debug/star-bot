@@ -915,6 +915,17 @@ const slashCommands = [
     .addUserOption(o => o.setName('user').setDescription('user to allow/deny').setRequired(false))
     .addIntegerOption(o => o.setName('limit').setDescription('user limit (0 = no limit) for limit action').setRequired(false).setMinValue(0).setMaxValue(99))
     .addStringOption(o => o.setName('name').setDescription('new channel name for rename action').setRequired(false)),
+
+  new SlashCommandBuilder().setName('generate').setDescription('generate usernames')
+    .setIntegrationTypes([ApplicationIntegrationType.GuildInstall, ApplicationIntegrationType.UserInstall])
+    .setContexts(ALL_CONTEXTS)
+    .addStringOption(o => o.setName('option').setDescription('type of username to generate').setRequired(true)
+      .addChoices(
+        { name: 'discord - words',  value: 'discord-words'  },
+        { name: 'roblox - words',   value: 'roblox-words'   },
+        { name: 'roblox - barcode', value: 'roblox-barcode' }
+      ))
+    .addBooleanOption(o => o.setName('show').setDescription('show the result publicly (default: only you see it)').setRequired(false)),
 ].map(c => c.toJSON());
 
 // ─── Status helper ────────────────────────────────────────────────────────────
@@ -1367,6 +1378,93 @@ client.on('interactionCreate', async interaction => {
   const channel = interaction.channel;
 
   // ── Open-to-everyone commands ────────────────────────────────────────────────
+  if (commandName === 'generate') {
+    const option  = interaction.options.getString('option')
+    const showPublic = interaction.options.getBoolean('show') ?? false
+    await interaction.deferReply({ ephemeral: !showPublic })
+
+    // first half of the mashup username
+    const partsA = [
+      'larp','grief','lung','ion','your','flex','cut','ghost','void','blur','drain','snap','melt','fade','numb','null','bleed','vibe','haze','glitch','flop','cope','soak','crave','drift','grind','lurk','burn','skim','zap','deflex','social','color','archive','scatter','hollow','shatter','fracture','spiral','unravel','detach','absorb','suppress','linger','exhaust','dissolve','consume','distort','collapse','isolate',
+      'lean','chug','chugging','blunt','smoke','cosplay','cosplaying','burnt','plug','rack','trap','phase','trace','swipe','scroll','sip','catch','chase','freeze','switch','pivot','loop','spin','twist','crack','pop','slide','coast','rush','peak','dip','fold','press','drag','grip','tap','slam','crash','smash','rip','slice','trim','clip','snip','roll','drop','flip','lurking','fading','bleeding','drifting','burning','grinding','coping','craving','soaking','melting','snapping','draining','blurring','zapping','vibing','hazing','glitching','flopping','snatching','trapping','chasing','catching','smoking','rolling','plugging'
+    ]
+    // second half of the mashup username
+    const partsB = [
+      'this','that','funds','off','lame','hurt','romance','ized','izing','wave','core','less','shift','drop','lock','mode','cast','link','fix','run','hit','zone','edge','cap','slip','miss','type','mark','form','load','flow','path','line','log','port','ed','ing','ness','ward','scape','fall','cycle','loop','gate','sink','crush','void','storm','drift',
+      'lean','sipper','blunt','catcher','playing','chugging','smoking','rolling','trapping','zoning','sliding','coasting','rushing','peaking','dipping','folding','pressing','dragging','gripping','tapping','slamming','crashing','smashing','grinding','lurking','fading','bleeding','drifting','burning','coping','craving','soaking','melting','snapping','draining','blurring','zapping','vibing','hazing','glitching','flopping','snatching','chasing','catching','plugging','flipping','racking','switching','pivoting','spinning','twisting','cracking','popping','griefs','blunts','smokes','rolls','flips','racks','traps','phases','traces','swipes','scrolls','sips'
+    ]
+
+    function pick(arr) { return arr[Math.floor(Math.random() * arr.length)] }
+    function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1) }
+    function randNum(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min }
+
+    function genWords(platform) {
+      const a = pick(partsA)
+      const b = pick(partsB)
+      if (platform === 'discord') {
+        return `${a}${b}`.slice(0, 32)
+      } else {
+        return `${cap(a)}${cap(b)}`.replace(/[^a-zA-Z0-9_]/g, '').slice(0, 20)
+      }
+    }
+
+    function genBarcode() {
+      const chars = ['l', 'I']
+      const len   = randNum(10, 16)
+      let result  = ''
+      while (result.length < len) result += pick(chars)
+      return result
+    }
+
+    async function isRobloxAvailable(username) {
+      try {
+        const res = await fetch(`https://auth.roblox.com/v1/usernames/validate?request.username=${encodeURIComponent(username)}&request.birthday=2000-01-01&request.context=Username`)
+        const data = await res.json()
+        return data.code === 0
+      } catch { return false }
+    }
+
+    const [platform, type] = option.split('-')
+    const count = 8
+    const maxAttempts = 80
+    const usernames = []
+    const seen = new Set()
+    let attempts = 0
+
+    if (platform === 'roblox') {
+      while (usernames.length < count && attempts < maxAttempts) {
+        attempts++
+        const candidate = type === 'words' ? genWords(platform) : genBarcode()
+        if (seen.has(candidate)) continue
+        seen.add(candidate)
+        const available = await isRobloxAvailable(candidate)
+        if (available) usernames.push(candidate)
+      }
+    } else {
+      while (usernames.length < count && attempts < maxAttempts) {
+        attempts++
+        const candidate = genWords(platform)
+        if (seen.has(candidate)) continue
+        seen.add(candidate)
+        usernames.push(candidate)
+      }
+    }
+
+    const platformLabel = platform === 'discord' ? 'Discord' : 'Roblox'
+    const typeLabel     = type === 'words' ? 'Words' : 'Barcode'
+    const footerText    = platform === 'roblox'
+      ? `${usernames.length} available usernames found (checked ${attempts} candidates)`
+      : `${count} usernames generated`
+
+    const e = baseEmbed()
+      .setColor(0xFFFFFF)
+      .setTitle(`${platformLabel} Usernames — ${typeLabel}`)
+      .setDescription(usernames.length > 0 ? usernames.map(u => `\`${u}\``).join('\n') : 'No available usernames found after checking — try again.')
+      .setFooter({ text: footerText, iconURL: LOGO_URL })
+
+    return interaction.editReply({ embeds: [e] })
+  }
+
   if (commandName === 'roblox') {
     await interaction.deferReply();
     const username = interaction.options.getString('username');
@@ -2639,12 +2737,6 @@ client.on('interactionCreate', async interaction => {
     if (!loadWhitelist().includes(interaction.user.id)) return interaction.reply({ content: "you're not whitelisted to use `/strip`", ephemeral: true });
     const robloxUser = interaction.options.getString('username');
     const reason     = interaction.options.getString('reason');
-    const taggedMembers = loadTaggedMembers();
-    let foundTag = null;
-    for (const [tagName, members] of Object.entries(taggedMembers)) {
-      if (members.map(m => m.toLowerCase()).includes(robloxUser.toLowerCase())) { foundTag = tagName; break; }
-    }
-    if (!foundTag) return interaction.reply({ content: `**${robloxUser}** doesn't have any tracked tag`, ephemeral: true });
     const groupId = process.env.ROBLOX_GROUP_ID;
     if (!groupId) return interaction.reply({ content: '`ROBLOX_GROUP_ID` isn\'t set', ephemeral: true });
     let rank2RoleId;
@@ -2661,30 +2753,25 @@ client.on('interactionCreate', async interaction => {
         result = await rankRobloxUser(robloxUser, rank2RoleId);
       } catch (rankErr) {
         const msg = rankErr.message?.toLowerCase() ?? '';
-        if (msg.includes('same role'))         skipReason = 'already at rank 1 (balls)';
-        else if (msg.includes("isn't in the group")) skipReason = 'not in group — tag removed only';
+        if (msg.includes('same role'))               skipReason = 'already at rank 1 (balls)';
+        else if (msg.includes("isn't in the group")) skipReason = 'not in group';
         if (skipReason) {
           const userBasic = (await (await fetch('https://users.roblox.com/v1/usernames/users', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ usernames: [robloxUser], excludeBannedUsers: false }) })).json()).data?.[0];
-          result = { displayName: userBasic?.displayName || robloxUser, userId: userBasic?.id || 'unknown', avatarUrl: null };
+          result = { displayName: userBasic?.name || robloxUser, userId: userBasic?.id || 'unknown', avatarUrl: null };
         } else { throw rankErr; }
       }
-      taggedMembers[foundTag] = taggedMembers[foundTag].filter(m => m.toLowerCase() !== robloxUser.toLowerCase());
-      if (!taggedMembers[foundTag].length) delete taggedMembers[foundTag];
-      saveTaggedMembers(taggedMembers);
       const embed = baseEmbed().setTitle('strip').setColor(0xFFFFFF)
         .addFields(
           { name: 'user',       value: result.displayName,           inline: true },
-          { name: 'tag removed', value: foundTag,                   inline: true },
           { name: 'stripped by', value: interaction.user.tag,        inline: true },
           { name: 'reason',     value: reason }
         ).setTimestamp();
-      if (skipReason)      embed.setFooter({ text: skipReason });
+      if (skipReason)       embed.setFooter({ text: skipReason });
       if (result.avatarUrl) embed.setThumbnail(result.avatarUrl);
       await interaction.editReply({ embeds: [embed] });
       const sLog = baseEmbed().setTitle('strip log').setColor(0xFFFFFF)
         .addFields(
           { name: 'user',       value: result.displayName,              inline: true },
-          { name: 'tag removed', value: foundTag,                      inline: true },
           { name: 'stripped by', value: `<@${interaction.user.id}>`,   inline: true },
           { name: 'reason',     value: reason }
         ).setFooter({ text: `roblox id: ${result.userId}${skipReason ? ` • ${skipReason}` : ''}` }).setTimestamp();
@@ -2695,7 +2782,6 @@ client.on('interactionCreate', async interaction => {
       await sendStripLog(guild, baseEmbed().setTitle('strip failed').setColor(0xFFFFFF)
         .addFields(
           { name: 'user', value: robloxUser, inline: true },
-          { name: 'tag',  value: foundTag,   inline: true },
           { name: 'attempted by', value: `<@${interaction.user.id}>`, inline: true },
           { name: 'reason', value: reason },
           { name: 'error',  value: err.message }
@@ -3477,16 +3563,6 @@ client.on('messageCreate', async message => {
     const reason = args.slice(1).join(' ');
     if (!robloxUser) return message.reply(`usage: \`${prefix}strip [robloxUsername] [reason]\``);
     if (!reason) return message.reply('you need to provide a reason');
-    // find which tag this user has
-    const taggedMembers = loadTaggedMembers();
-    let foundTag = null;
-    for (const [tagName, members] of Object.entries(taggedMembers)) {
-      if (members.map(m => m.toLowerCase()).includes(robloxUser.toLowerCase())) {
-        foundTag = tagName;
-        break;
-      }
-    }
-    if (!foundTag) return message.reply(`**${robloxUser}** doesn't have any tracked tag`);
     const groupId = process.env.ROBLOX_GROUP_ID;
     if (!groupId) return message.reply('`ROBLOX_GROUP_ID` isnt set');
     let rank2RoleId;
@@ -3496,7 +3572,7 @@ client.on('messageCreate', async message => {
       if (!rank2) return message.reply("couldn't find a rank 1 role in the group");
       rank2RoleId = String(rank2.id);
     } catch { return message.reply("couldn't fetch group roles, try again"); }
-    const status = await message.reply({ embeds: [baseEmbed().setColor(0xFFFFFF).setDescription(`stripping **${robloxUser}** (tag: **${foundTag}**)...`)] });
+    const status = await message.reply({ embeds: [baseEmbed().setColor(0xFFFFFF).setDescription(`stripping **${robloxUser}**...`)] });
     try {
       let result;
       let skipReason = null;
@@ -3507,23 +3583,18 @@ client.on('messageCreate', async message => {
         if (msg.includes('same role')) {
           skipReason = 'already at rank 1 (balls)';
         } else if (msg.includes("isn't in the group")) {
-          skipReason = 'not in group — tag removed only';
+          skipReason = 'not in group';
         }
         if (skipReason) {
           const userBasic = (await (await fetch('https://users.roblox.com/v1/usernames/users', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ usernames: [robloxUser], excludeBannedUsers: false }) })).json()).data?.[0];
-          result = { displayName: userBasic?.displayName || robloxUser, userId: userBasic?.id || 'unknown', avatarUrl: null };
+          result = { displayName: userBasic?.name || robloxUser, userId: userBasic?.id || 'unknown', avatarUrl: null };
         } else {
           throw rankErr;
         }
       }
-      // remove from tagged members
-      taggedMembers[foundTag] = taggedMembers[foundTag].filter(m => m.toLowerCase() !== robloxUser.toLowerCase());
-      if (!taggedMembers[foundTag].length) delete taggedMembers[foundTag];
-      saveTaggedMembers(taggedMembers);
       const embed = baseEmbed().setTitle('strip').setColor(0xFFFFFF)
         .addFields(
           { name: 'user', value: result.displayName, inline: true },
-          { name: 'tag removed', value: foundTag, inline: true },
           { name: 'stripped by', value: message.author.tag, inline: true },
           { name: 'reason', value: reason }
         )
@@ -3534,7 +3605,6 @@ client.on('messageCreate', async message => {
       const logEmbed = baseEmbed().setTitle('strip log').setColor(0xFFFFFF)
         .addFields(
           { name: 'user', value: result.displayName, inline: true },
-          { name: 'tag removed', value: foundTag, inline: true },
           { name: 'stripped by', value: `<@${message.author.id}>`, inline: true },
           { name: 'reason', value: reason }
         ).setFooter({ text: `roblox id: ${result.userId}${skipReason ? ` • ${skipReason}` : ''}` }).setTimestamp();
@@ -3545,7 +3615,6 @@ client.on('messageCreate', async message => {
       const failEmbed = baseEmbed().setTitle('strip failed').setColor(0xFFFFFF)
         .addFields(
           { name: 'user', value: robloxUser, inline: true },
-          { name: 'tag', value: foundTag, inline: true },
           { name: 'attempted by', value: `<@${message.author.id}>`, inline: true },
           { name: 'reason', value: reason },
           { name: 'error', value: err.message }
