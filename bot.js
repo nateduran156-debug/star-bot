@@ -85,6 +85,11 @@ const vanityEmbed  = t => embed('vanity',  t)
 const userEmbed    = t => embed('user',    t)
 const actionEmbed  = t => embed('action',  t)
 
+// helper: send an embed reply and return the sent message
+async function reply(message, embedObj) {
+  return message.reply({ embeds: [embedObj] })
+}
+
 // json file paths for everything
 const TAGS_FILE = path.join(__dirname, 'tags.json')
 const HUSHED_FILE = path.join(__dirname, 'hushed.json')
@@ -350,6 +355,39 @@ async function unjailMember(guild, member, modTag) {
   saveJail(jailData);
   return baseEmbed().setTitle('unjailed').setColor(0xFFFFFF).setThumbnail(member.user.displayAvatarURL())
     .addFields({ name: 'user', value: member.user.tag, inline: true }, { name: 'mod', value: modTag, inline: true }).setTimestamp();
+}
+
+// ─── inrole handler ───────────────────────────────────────────────────────────
+async function handleInrole(message, roleInput) {
+  const loading = await reply(message, embed('⏳ Working...', `Scanning role **${roleInput.name}**...`))
+  await message.guild.members.fetch()
+  const members = message.guild.members.cache.filter(m => !m.user.bot && m.roles.cache.has(roleInput.id))
+
+  if (!members.size) {
+    return loading.edit({ embeds: [baseEmbed().setColor(0xFFFFFF).setTitle(`Members with ${roleInput.name}`).setDescription('nobody has this role')] })
+  }
+
+  const lines = [...members.values()]
+    .sort((a, b) => a.user.username.localeCompare(b.user.username))
+    .map((m, i) => `${String(i + 1).padStart(2, '0')} ${m} (${m.user.username})`)
+    .join('\n')
+
+  const chunks = []
+  const CHUNK = 4000
+  for (let i = 0; i < lines.length; i += CHUNK) chunks.push(lines.slice(i, i + CHUNK))
+
+  await loading.edit({
+    embeds: [baseEmbed().setColor(0xFFFFFF)
+      .setTitle(`Members with ${roleInput.name}`)
+      .setDescription(chunks[0])
+      .setFooter({ text: `${members.size} total member${members.size !== 1 ? 's' : ''}`, iconURL: LOGO_URL })]
+  })
+  for (let i = 1; i < chunks.length; i++) {
+    await message.reply({ embeds: [baseEmbed().setColor(0xFFFFFF)
+      .setTitle(`Members with ${roleInput.name} (cont.)`)
+      .setDescription(chunks[i])
+      .setFooter({ text: `${members.size} total member${members.size !== 1 ? 's' : ''}`, iconURL: LOGO_URL })] })
+  }
 }
 
 // ─── Help pages ───────────────────────────────────────────────────────────────
@@ -4472,28 +4510,7 @@ client.on('messageCreate', async message => {
     const role = message.mentions.roles?.first();
     if (!role) return message.reply(`usage: \`${prefix}inrole @role\`\nexample: \`${prefix}inrole @Members\``);
 
-    await message.guild.members.fetch();
-    const members = message.guild.members.cache.filter(m => !m.user.bot && m.roles.cache.has(role.id));
-
-    if (!members.size) return message.reply({ embeds: [baseEmbed().setColor(0xFFFFFF).setTitle(`Members with ${role.name}`).setDescription('nobody has this role')] });
-
-    const lines = [...members.values()]
-      .sort((a, b) => a.user.username.localeCompare(b.user.username))
-      .map((m, i) => `${String(i + 1).padStart(2, '0')} ${m} (${m.user.username})`)
-      .join('\n');
-
-    const chunks = [];
-    const CHUNK = 4000;
-    for (let i = 0; i < lines.length; i += CHUNK) chunks.push(lines.slice(i, i + CHUNK));
-
-    for (let i = 0; i < chunks.length; i++) {
-      const e = baseEmbed().setColor(0xFFFFFF)
-        .setTitle(i === 0 ? `Members with ${role.name}` : `Members with ${role.name} (cont.)`)
-        .setDescription(chunks[i])
-        .setFooter({ text: `${members.size} total member${members.size !== 1 ? 's' : ''}`, iconURL: LOGO_URL });
-      await message.reply({ embeds: [e] });
-    }
-    return;
+    return handleInrole(message, role);
   }
 
   // ── .rid ─────────────────────────────────────────────────────────────────────
