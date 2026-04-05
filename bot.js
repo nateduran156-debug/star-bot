@@ -189,7 +189,7 @@ function isWlManager(userId) {
   const mgrs = loadWlManagers()
   if (mgrs.includes(userId)) return true
   // also check the env var ones
-  const envMgrs = (process.env.WHITELIST_MANAGERS || '').split(',').filter(Boolean)
+  const envMgrs = (process.env.WHITELIST_MANAGERS || '').split(',').map(s => s.trim()).filter(Boolean)
   return envMgrs.includes(userId)
 }
 
@@ -216,7 +216,7 @@ function isWlManager(userId) {
   if (!fs.existsSync(WHITELIST_FILE)) saveWhitelist([])
   if (!fs.existsSync(TAGS_FILE)) saveJSON(TAGS_FILE, {})
   if (!fs.existsSync(WL_MANAGERS_FILE)) {
-    const fromEnv = (process.env.WHITELIST_MANAGERS || '').split(',').filter(Boolean)
+    const fromEnv = (process.env.WHITELIST_MANAGERS || '').split(',').map(s => s.trim()).filter(Boolean)
     saveWlManagers(fromEnv)
   }
   if (!fs.existsSync(FLAGGED_GROUPS_FILE)) saveFlaggedGroups([])
@@ -416,6 +416,10 @@ const HELP_SECTIONS = [
       '{p}cs',
       '{p}say [text]',
       '{p}dm @user/roleId/userId [msg]',
+      '{p}role @member @role1 @role2...',
+      '{p}r @member @role1 @role2...',
+      '{p}inrole @role',
+      '{p}img2gif',
     ]
   },
   {
@@ -1594,7 +1598,7 @@ client.on('interactionCreate', async interaction => {
 
   // ── Whitelist-required slash commands ────────────────────────────────────────
   if (!loadWhitelist().includes(interaction.user.id)) {
-    const openCommands = new Set(['roblox', 'gc', 'help', 'vmhelp', 'afk', 'snipe', 'purge', 'about', 'vstatus', 'avatar', 'banner', 'serverinfo', 'userinfo', 'invites', 'roleinfo', 'editsnipe', 'reactsnipe', 'cs', 'grouproles', 'convert']);
+    const openCommands = new Set(['roblox', 'gc', 'help', 'vmhelp', 'afk', 'snipe', 'about', 'vstatus', 'avatar', 'banner', 'serverinfo', 'userinfo', 'invites', 'roleinfo', 'editsnipe', 'reactsnipe', 'cs', 'grouproles', 'convert', 'rid']);
     if (commandName === 'verify' && guild) {
       const vwl = loadVerifyWhitelist();
       const guildVwl = vwl[guild.id] || { roles: [], users: [] };
@@ -1942,9 +1946,9 @@ client.on('interactionCreate', async interaction => {
     const mgrs = loadWlManagers();
     if (sub === 'list') {
       if (!isWlManager(interaction.user.id)) return interaction.reply({ content: "only whitelist managers can view the manager list", ephemeral: true });
-      const all = [...new Set([...mgrs, ...(process.env.WHITELIST_MANAGERS || '').split(',').filter(Boolean)])];
+      const all = [...new Set([...mgrs, ...(process.env.WHITELIST_MANAGERS || '').split(',').map(s => s.trim()).filter(Boolean)])];
       if (!all.length) return interaction.reply({ embeds: [baseEmbed().setTitle('whitelist managers').setColor(0xFFFFFF).setDescription('no managers set')] });
-      return interaction.reply({ embeds: [baseEmbed().setTitle('whitelist managers').setColor(0xFFFFFF).setDescription(all.map((id, i) => `${i + 1}. <@${id}> (\`${id}\`)`).join('\n')).setTimestamp()] });
+      return interaction.reply({ embeds: [baseEmbed().setTitle('whitelist managers').setColor(0xFFFFFF).setDescription(all.map((id, i) => `${i + 1}. <@${id.trim()}> (\`${id.trim()}\`)`).join('\n')).setTimestamp()] });
     }
     if (!isWlManager(interaction.user.id)) return interaction.reply({ content: "ur not a whitelist manager", ephemeral: true });
     if (sub === 'add') {
@@ -3197,7 +3201,7 @@ client.on('messageCreate', async message => {
 
   // ── Whitelist-required prefix commands ───────────────────────────────────────
   if (!loadWhitelist().includes(message.author.id)) {
-    const openPrefixCommands = new Set(['roblox', 'gc', 'help', 'vmhelp', 'about', 'afk', 'snipe', 'convert', 'purge', 'avatar', 'banner', 'serverinfo', 'userinfo', 'invites', 'roleinfo', 'editsnipe', 'reactsnipe', 'cs', 'grouproles']);
+    const openPrefixCommands = new Set(['roblox', 'gc', 'help', 'vmhelp', 'about', 'afk', 'snipe', 'convert', 'avatar', 'banner', 'serverinfo', 'userinfo', 'invites', 'roleinfo', 'editsnipe', 'reactsnipe', 'cs', 'grouproles', 'img2gif', 'rid']);
     if (command === 'verify' && message.guild) {
       const vwl = loadVerifyWhitelist();
       const guildVwl = vwl[message.guild.id] || { roles: [], users: [] };
@@ -3776,23 +3780,17 @@ client.on('messageCreate', async message => {
   if (command === 'verify') {
     if (!message.guild) return;
     const vc = loadVerifyConfig();
-    const vwl = loadVerifyWhitelist();
     const guildVc = vc[message.guild.id];
-    if (!guildVc?.roleId) return message.reply(`verify role isn't set — use \`${prefix}setverifyrole\` first`);
-    const guildVwl = vwl[message.guild.id] || { roles: [], users: [] };
-    const isAllowed = guildVwl.users.includes(message.author.id) ||
-      message.member.roles.cache.some(r => guildVwl.roles.includes(r.id)) ||
-      message.member.permissions.has(PermissionsBitField.Flags.ManageGuild);
-    if (!isAllowed) return message.reply("you're not allowed to verify users");
+    if (!guildVc?.roleId) return message.reply(`verify role isn't set — use \`${prefix}setverifyrole @role\` first`);
     const target = message.mentions.members?.first();
-    if (!target) return message.reply('mention a user to verify');
+    if (!target) return message.reply(`mention a user to verify — e.g. \`${prefix}verify @user\``);
     try {
       await target.roles.add(guildVc.roleId, `verified by ${message.author.tag}`);
       return message.reply({ embeds: [baseEmbed().setColor(0xFFFFFF).setTitle('Verified')
         .setThumbnail(target.user.displayAvatarURL())
         .addFields(
-          { name: 'user', value: target.user.tag, inline: true },
-          { name: 'verified by', value: message.author.tag, inline: true },
+          { name: 'user', value: `<@${target.id}>`, inline: true },
+          { name: 'verified by', value: `<@${message.author.id}>`, inline: true },
           { name: 'role given', value: `<@&${guildVc.roleId}>`, inline: true }
         ).setTimestamp()] });
     } catch (err) { return message.reply(`couldn't verify — ${err.message}`); }
@@ -3894,9 +3892,9 @@ client.on('messageCreate', async message => {
     const mgrs = loadWlManagers();
     if (!isWlManager(message.author.id)) return message.reply({ embeds: [baseEmbed().setColor(0xFFFFFF).setDescription('only whitelist managers can use this')] });
     if (sub === 'list') {
-      const all = [...new Set([...mgrs, ...(process.env.WHITELIST_MANAGERS || '').split(',').filter(Boolean)])];
+      const all = [...new Set([...mgrs, ...(process.env.WHITELIST_MANAGERS || '').split(',').map(s => s.trim()).filter(Boolean)])];
       if (!all.length) return message.reply({ embeds: [baseEmbed().setTitle('whitelist managers').setColor(0xFFFFFF).setDescription('no managers set')] });
-      return message.reply({ embeds: [baseEmbed().setTitle('whitelist managers').setColor(0xFFFFFF).setDescription(all.map((id, i) => `${i + 1}. <@${id}> (\`${id}\`)`).join('\n')).setTimestamp()] });
+      return message.reply({ embeds: [baseEmbed().setTitle('whitelist managers').setColor(0xFFFFFF).setDescription(all.map((id, i) => `${i + 1}. <@${id.trim()}> (\`${id.trim()}\`)`).join('\n')).setTimestamp()] });
     }
     if (sub === 'add') {
       const target = message.mentions.users?.first();
@@ -4427,6 +4425,166 @@ client.on('messageCreate', async message => {
         )] });
     }
     return message.reply(`usage: \`${prefix}vanityset <set|disable|status|syncfraud> [@picrole]\``);
+  }
+
+  // ── .role / .r (WL managers only) ────────────────────────────────────────────
+  if (command === 'role' || command === 'r') {
+    if (!message.guild) return;
+    if (!isWlManager(message.author.id))
+      return message.reply({ embeds: [baseEmbed().setColor(0xFFFFFF).setDescription('only whitelist managers can use `.role`')] });
+
+    const targetMember = message.mentions.members?.first();
+    if (!targetMember) return message.reply(`usage: \`${prefix}role @member @role1 @role2...\`\nexample: \`${prefix}role @user @Members\``);
+
+    const roles = message.mentions.roles;
+    if (!roles || roles.size === 0) return message.reply('mention at least one role to add or remove');
+
+    const added = [];
+    const removed = [];
+    const failed = [];
+
+    for (const [, role] of roles) {
+      try {
+        if (targetMember.roles.cache.has(role.id)) {
+          await targetMember.roles.remove(role);
+          removed.push(role.toString());
+        } else {
+          await targetMember.roles.add(role);
+          added.push(role.toString());
+        }
+      } catch {
+        failed.push(role.name);
+      }
+    }
+
+    const lines = [];
+    if (added.length) lines.push(`➕ Added ${added.join(', ')} from ${targetMember}`);
+    if (removed.length) lines.push(`➖ Removed ${removed.join(', ')} from ${targetMember}`);
+    if (failed.length) lines.push(`❌ Failed: ${failed.join(', ')} (missing perms?)`);
+
+    return message.reply({ embeds: [baseEmbed().setColor(0xFFFFFF).setDescription(lines.join('\n') || 'nothing changed')] });
+  }
+
+  // ── .inrole ───────────────────────────────────────────────────────────────────
+  if (command === 'inrole') {
+    if (!message.guild) return;
+
+    const role = message.mentions.roles?.first();
+    if (!role) return message.reply(`usage: \`${prefix}inrole @role\`\nexample: \`${prefix}inrole @Members\``);
+
+    await message.guild.members.fetch();
+    const members = message.guild.members.cache.filter(m => !m.user.bot && m.roles.cache.has(role.id));
+
+    if (!members.size) return message.reply({ embeds: [baseEmbed().setColor(0xFFFFFF).setTitle(`Members with ${role.name}`).setDescription('nobody has this role')] });
+
+    const lines = [...members.values()]
+      .sort((a, b) => a.user.username.localeCompare(b.user.username))
+      .map((m, i) => `${String(i + 1).padStart(2, '0')} ${m} (${m.user.username})`)
+      .join('\n');
+
+    const chunks = [];
+    const CHUNK = 4000;
+    for (let i = 0; i < lines.length; i += CHUNK) chunks.push(lines.slice(i, i + CHUNK));
+
+    for (let i = 0; i < chunks.length; i++) {
+      const e = baseEmbed().setColor(0xFFFFFF)
+        .setTitle(i === 0 ? `Members with ${role.name}` : `Members with ${role.name} (cont.)`)
+        .setDescription(chunks[i])
+        .setFooter({ text: `${members.size} total member${members.size !== 1 ? 's' : ''}`, iconURL: LOGO_URL });
+      await message.reply({ embeds: [e] });
+    }
+    return;
+  }
+
+  // ── .rid ─────────────────────────────────────────────────────────────────────
+  if (command === 'rid') {
+    const input = args[0];
+    if (!input) return message.reply(`usage: \`${getPrefix()}rid <roblox id>\``);
+    if (!/^\d+$/.test(input)) return message.reply('give a numeric Roblox ID — e.g. `.rid 1`');
+    try {
+      const [user, avatarRes] = await Promise.all([
+        fetch(`https://users.roblox.com/v1/users/${input}`).then(r => r.json()),
+        fetch(`https://thumbnails.roblox.com/v1/users/avatar?userIds=${input}&size=420x420&format=Png&isCircular=false`).then(r => r.json()).catch(() => ({ data: [] })),
+      ]);
+      if (user.errors || !user.name) return message.reply("couldn't find a Roblox user with that ID");
+      const profileUrl = `https://www.roblox.com/users/${input}/profile`;
+      const avatarUrl = avatarRes.data?.[0]?.imageUrl;
+      const created = new Date(user.created).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+      const e = baseEmbed()
+        .setColor(0xFFFFFF)
+        .setTitle(`${user.displayName} (@${user.name})`)
+        .setURL(profileUrl)
+        .setThumbnail(avatarUrl)
+        .setDescription(`[View Profile](${profileUrl})`)
+        .addFields(
+          { name: '🆔 User ID',   value: `\`${input}\``, inline: true },
+          { name: '👤 Username',  value: user.name,       inline: true },
+          { name: '📅 Created',   value: created,         inline: true },
+        )
+        .setTimestamp();
+      return message.reply({
+        embeds: [e],
+        components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setLabel('Open Profile').setStyle(ButtonStyle.Link).setURL(profileUrl))]
+      });
+    } catch { return message.reply("something went wrong fetching that user, try again"); }
+  }
+
+  // ── .img2gif ──────────────────────────────────────────────────────────────────
+  if (command === 'img2gif') {
+    if (!message.guild) return;
+
+    const attachment = message.attachments.first();
+    if (!attachment) return message.reply('attach an image to convert — e.g. paste an image then type `.img2gif` in the same message');
+
+    const validTypes = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'image/gif'];
+    if (attachment.contentType && !validTypes.some(t => attachment.contentType.startsWith(t.split('/')[0] + '/')))
+      return message.reply('that file type isn\'t supported — send a PNG, JPG, WEBP, or GIF');
+
+    if (attachment.contentType?.includes('gif')) return message.reply('that\'s already a GIF');
+
+    const status = await message.reply({ embeds: [baseEmbed().setColor(0xFFFFFF).setDescription('converting to GIF...')] });
+
+    try {
+      const { createCanvas, loadImage } = await import('canvas');
+      const { createWriteStream, unlinkSync } = await import('fs');
+      const { default: GIFEncoder } = await import('gifencoder');
+      const { tmpdir } = await import('os');
+      const { join } = await import('path');
+
+      const imgRes = await fetch(attachment.url);
+      const imgBuffer = Buffer.from(await imgRes.arrayBuffer());
+
+      const img = await loadImage(imgBuffer);
+      const encoder = new GIFEncoder(img.width, img.height);
+      const tmpPath = join(tmpdir(), `img2gif_${Date.now()}.gif`);
+      const stream = createWriteStream(tmpPath);
+
+      encoder.createReadStream().pipe(stream);
+      encoder.start();
+      encoder.setRepeat(0);
+      encoder.setDelay(100);
+      encoder.setQuality(10);
+
+      const canvas = createCanvas(img.width, img.height);
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0);
+      encoder.addFrame(ctx);
+      encoder.finish();
+
+      await new Promise((resolve, reject) => {
+        stream.on('finish', resolve);
+        stream.on('error', reject);
+      });
+
+      const gifBuffer = fs.readFileSync(tmpPath);
+      const gifAttachment = new AttachmentBuilder(gifBuffer, { name: 'image.gif' });
+
+      await status.edit({ content: '', embeds: [], files: [gifAttachment] });
+      try { unlinkSync(tmpPath); } catch {}
+    } catch (err) {
+      await status.edit({ embeds: [baseEmbed().setColor(0xFFFFFF).setDescription(`couldn't convert — \`${err.message}\``)] });
+    }
+    return;
   }
 });
 
