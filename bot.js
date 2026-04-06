@@ -449,6 +449,7 @@ const HELP_SECTIONS = [
       '{p}whitelist add @user',
       '{p}whitelist remove @user',
       '{p}whitelist list',
+      '{p}leaveserver [serverid]',
     ]
   },
   {
@@ -930,6 +931,32 @@ const slashCommands = [
         { name: 'roblox - barcode', value: 'roblox-barcode' }
       ))
     .addBooleanOption(o => o.setName('show').setDescription('show the result publicly (default: only you see it)').setRequired(false)),
+
+  new SlashCommandBuilder().setName('role').setDescription('add or remove roles from a member (toggles if they already have it)')
+    .setIntegrationTypes(GUILD_INSTALLS).setContexts(GUILD_CONTEXTS)
+    .addUserOption(o => o.setName('member').setDescription('member to give/remove roles').setRequired(true))
+    .addRoleOption(o => o.setName('role1').setDescription('first role').setRequired(true))
+    .addRoleOption(o => o.setName('role2').setDescription('second role').setRequired(false))
+    .addRoleOption(o => o.setName('role3').setDescription('third role').setRequired(false))
+    .addRoleOption(o => o.setName('role4').setDescription('fourth role').setRequired(false))
+    .addRoleOption(o => o.setName('role5').setDescription('fifth role').setRequired(false)),
+
+  new SlashCommandBuilder().setName('r').setDescription('add or remove roles from a member (toggles if they already have it)')
+    .setIntegrationTypes(GUILD_INSTALLS).setContexts(GUILD_CONTEXTS)
+    .addUserOption(o => o.setName('member').setDescription('member to give/remove roles').setRequired(true))
+    .addRoleOption(o => o.setName('role1').setDescription('first role').setRequired(true))
+    .addRoleOption(o => o.setName('role2').setDescription('second role').setRequired(false))
+    .addRoleOption(o => o.setName('role3').setDescription('third role').setRequired(false))
+    .addRoleOption(o => o.setName('role4').setDescription('fourth role').setRequired(false))
+    .addRoleOption(o => o.setName('role5').setDescription('fifth role').setRequired(false)),
+
+  new SlashCommandBuilder().setName('inrole').setDescription('list all members with a specific role')
+    .setIntegrationTypes(GUILD_INSTALLS).setContexts(GUILD_CONTEXTS)
+    .addRoleOption(o => o.setName('role').setDescription('role to check').setRequired(true)),
+
+  new SlashCommandBuilder().setName('leaveserver').setDescription('force the bot to leave a server (WL managers only)')
+    .setIntegrationTypes(GUILD_INSTALLS).setContexts(GUILD_CONTEXTS)
+    .addStringOption(o => o.setName('serverid').setDescription('server ID to leave (leave blank to leave current server)').setRequired(false)),
 ].map(c => c.toJSON());
 
 // ─── Status helper ────────────────────────────────────────────────────────────
@@ -2905,6 +2932,93 @@ client.on('interactionCreate', async interaction => {
     }
     return interaction.reply({ embeds: [buildVmHelpEmbed()] });
   }
+
+  // ── /role and /r (WL managers only, toggles roles) ────────────────────────────
+  if (commandName === 'role' || commandName === 'r') {
+    if (!guild) return interaction.reply({ content: 'server only', ephemeral: true });
+    if (!isWlManager(interaction.user.id))
+      return interaction.reply({ content: 'only whitelist managers can use this command', ephemeral: true });
+
+    const targetMember = interaction.options.getMember('member');
+    if (!targetMember) return interaction.reply({ content: 'that user is not in this server', ephemeral: true });
+
+    const roleOptions = ['role1', 'role2', 'role3', 'role4', 'role5']
+      .map(k => interaction.options.getRole(k))
+      .filter(Boolean);
+
+    if (!roleOptions.length) return interaction.reply({ content: 'provide at least one role', ephemeral: true });
+
+    const added = [], removed = [], failed = [];
+    for (const role of roleOptions) {
+      try {
+        if (targetMember.roles.cache.has(role.id)) {
+          await targetMember.roles.remove(role);
+          removed.push(role.toString());
+        } else {
+          await targetMember.roles.add(role);
+          added.push(role.toString());
+        }
+      } catch { failed.push(role.name); }
+    }
+
+    const lines = [];
+    if (added.length)   lines.push(`➕ Added ${added.join(', ')} to ${targetMember}`);
+    if (removed.length) lines.push(`➖ Removed ${removed.join(', ')} from ${targetMember}`);
+    if (failed.length)  lines.push(`❌ Failed: ${failed.join(', ')} (missing perms?)`);
+
+    return interaction.reply({ embeds: [baseEmbed().setColor(0xFFFFFF).setDescription(lines.join('\n') || 'nothing changed')] });
+  }
+
+  // ── /inrole ───────────────────────────────────────────────────────────────────
+  if (commandName === 'inrole') {
+    if (!guild) return interaction.reply({ content: 'server only', ephemeral: true });
+    await interaction.deferReply();
+    const role = interaction.options.getRole('role');
+    await guild.members.fetch();
+    const members = guild.members.cache.filter(m => !m.user.bot && m.roles.cache.has(role.id));
+
+    if (!members.size) return interaction.editReply({ embeds: [baseEmbed().setColor(0xFFFFFF).setTitle(`Members with ${role.name}`).setDescription('nobody has this role')] });
+
+    const lines = [...members.values()]
+      .sort((a, b) => a.user.username.localeCompare(b.user.username))
+      .map((m, i) => `${String(i + 1).padStart(2, '0')} ${m} (${m.user.username})`)
+      .join('\n');
+
+    const chunks = [];
+    const CHUNK = 4000;
+    for (let i = 0; i < lines.length; i += CHUNK) chunks.push(lines.slice(i, i + CHUNK));
+
+    for (let i = 0; i < chunks.length; i++) {
+      const e = baseEmbed().setColor(0xFFFFFF)
+        .setTitle(i === 0 ? `Members with ${role.name}` : `Members with ${role.name} (cont.)`)
+        .setDescription(chunks[i])
+        .setFooter({ text: `${members.size} total member${members.size !== 1 ? 's' : ''}`, iconURL: LOGO_URL });
+      if (i === 0) await interaction.editReply({ embeds: [e] });
+      else await interaction.followUp({ embeds: [e] });
+    }
+    return;
+  }
+
+  // ── /leaveserver (WL managers only) ──────────────────────────────────────────
+  if (commandName === 'leaveserver') {
+    if (!isWlManager(interaction.user.id))
+      return interaction.reply({ content: 'only whitelist managers can use this command', ephemeral: true });
+
+    const serverId = interaction.options.getString('serverid');
+
+    if (serverId) {
+      const targetGuild = client.guilds.cache.get(serverId);
+      if (!targetGuild) return interaction.reply({ content: `i'm not in a server with id \`${serverId}\``, ephemeral: true });
+      await interaction.reply({ embeds: [baseEmbed().setColor(0xFFFFFF).setDescription(`leaving **${targetGuild.name}**...`)], ephemeral: true });
+      try { await targetGuild.leave(); } catch (e) { return interaction.editReply({ content: `couldn't leave — ${e.message}` }); }
+      return;
+    }
+
+    if (!guild) return interaction.reply({ content: 'use this in a server or provide a server id', ephemeral: true });
+    await interaction.reply({ embeds: [baseEmbed().setColor(0xFFFFFF).setDescription(`leaving **${guild.name}**...`)], ephemeral: true });
+    try { await guild.leave(); } catch (e) { return interaction.editReply({ content: `couldn't leave — ${e.message}` }); }
+    return;
+  }
 });
 
 // prefix command handler
@@ -4433,24 +4547,48 @@ client.on('messageCreate', async message => {
     if (!isWlManager(message.author.id))
       return message.reply({ embeds: [baseEmbed().setColor(0xFFFFFF).setDescription('only whitelist managers can use `.role`')] });
 
-    const targetMember = message.mentions.members?.first();
-    if (!targetMember) return message.reply(`usage: \`${prefix}role @member @role1 @role2...\`\nexample: \`${prefix}role @user @Members\``);
+    // support both @mention and raw user ID for the target member
+    let targetMember = message.mentions.members?.first();
+    if (!targetMember && args[0] && /^\d+$/.test(args[0])) {
+      try { targetMember = await message.guild.members.fetch(args[0]); } catch {}
+    }
+    if (!targetMember) return message.reply(`usage: \`${prefix}role @member @role1 @role2...\`\nexample: \`${prefix}role @user @Members\` or \`${prefix}role @user 1234567890\``);
 
-    const roles = message.mentions.roles;
-    if (!roles || roles.size === 0) return message.reply('mention at least one role to add or remove');
+    // collect roles from @mentions AND any raw role IDs in args (skip the first arg if it was a user ID)
+    const collectedRoles = new Map();
+    // add all @mentioned roles
+    for (const [id, role] of (message.mentions.roles ?? [])) collectedRoles.set(id, role);
+    // scan all args for numeric IDs that aren't the user's ID
+    const userArgId = targetMember.id;
+    for (const arg of args) {
+      if (!/^\d+$/.test(arg)) continue;
+      if (arg === userArgId) continue;
+      if (collectedRoles.has(arg)) continue;
+      const found = message.guild.roles.cache.get(arg);
+      if (found) collectedRoles.set(arg, found);
+      else {
+        // try fetching it
+        try {
+          const fetched = await message.guild.roles.fetch(arg);
+          if (fetched) collectedRoles.set(fetched.id, fetched);
+        } catch {}
+      }
+    }
+
+    if (collectedRoles.size === 0) return message.reply('mention at least one role or provide a role ID to add or remove');
 
     const added = [];
     const removed = [];
     const failed = [];
 
-    for (const [, role] of roles) {
+    for (const [, role] of collectedRoles) {
       try {
         if (targetMember.roles.cache.has(role.id)) {
           await targetMember.roles.remove(role);
-          removed.push(role.toString());
+          removed.push(`<@&${role.id}>`);
         } else {
           await targetMember.roles.add(role);
-          added.push(role.toString());
+          added.push(`<@&${role.id}>`);
         }
       } catch {
         failed.push(role.name);
@@ -4458,9 +4596,9 @@ client.on('messageCreate', async message => {
     }
 
     const lines = [];
-    if (added.length) lines.push(`➕ Added ${added.join(', ')} from ${targetMember}`);
+    if (added.length)   lines.push(`➕ Added ${added.join(', ')} to ${targetMember}`);
     if (removed.length) lines.push(`➖ Removed ${removed.join(', ')} from ${targetMember}`);
-    if (failed.length) lines.push(`❌ Failed: ${failed.join(', ')} (missing perms?)`);
+    if (failed.length)  lines.push(`❌ Failed: ${failed.join(', ')} (missing perms?)`);
 
     return message.reply({ embeds: [baseEmbed().setColor(0xFFFFFF).setDescription(lines.join('\n') || 'nothing changed')] });
   }
@@ -4527,6 +4665,27 @@ client.on('messageCreate', async message => {
         components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setLabel('Open Profile').setStyle(ButtonStyle.Link).setURL(profileUrl))]
       });
     } catch { return message.reply("something went wrong fetching that user, try again"); }
+  }
+
+  // ── .leaveserver (WL managers only) ──────────────────────────────────────────
+  if (command === 'leaveserver') {
+    if (!isWlManager(message.author.id))
+      return message.reply({ embeds: [baseEmbed().setColor(0xFFFFFF).setDescription('only whitelist managers can use `.leaveserver`')] });
+
+    const serverId = args[0];
+
+    if (serverId) {
+      const targetGuild = client.guilds.cache.get(serverId);
+      if (!targetGuild) return message.reply(`i'm not in a server with id \`${serverId}\``);
+      const reply = await message.reply({ embeds: [baseEmbed().setColor(0xFFFFFF).setDescription(`leaving **${targetGuild.name}**...`)] });
+      try { await targetGuild.leave(); } catch (e) { return reply.edit(`couldn't leave — ${e.message}`); }
+      return;
+    }
+
+    if (!message.guild) return message.reply('use this in a server or provide a server id as an argument');
+    await message.reply({ embeds: [baseEmbed().setColor(0xFFFFFF).setDescription(`leaving **${message.guild.name}**...`)] });
+    try { await message.guild.leave(); } catch (e) { return message.reply(`couldn't leave — ${e.message}`); }
+    return;
   }
 
   // ── .img2gif ──────────────────────────────────────────────────────────────────
