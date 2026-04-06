@@ -417,8 +417,7 @@ const HELP_SECTIONS = [
       '{p}say [text]',
       '{p}dm @user/roleId/userId [msg]',
       '{p}role @member @role1 @role2...',
-      '{p}r @member @role1 @role2...',
-      '{p}inrole @role',
+      '{p}inrole @role/roleId',
       '{p}img2gif',
     ]
   },
@@ -450,6 +449,7 @@ const HELP_SECTIONS = [
       '{p}whitelist remove @user',
       '{p}whitelist list',
       '{p}leaveserver [serverid]',
+      '{p}servers',
     ]
   },
   {
@@ -4607,8 +4607,15 @@ client.on('messageCreate', async message => {
   if (command === 'inrole') {
     if (!message.guild) return;
 
-    const role = message.mentions.roles?.first();
-    if (!role) return message.reply(`usage: \`${prefix}inrole @role\`\nexample: \`${prefix}inrole @Members\``);
+    // support both @role mention and raw role ID
+    let role = message.mentions.roles?.first();
+    if (!role && args[0] && /^\d+$/.test(args[0])) {
+      role = message.guild.roles.cache.get(args[0]);
+      if (!role) {
+        try { role = await message.guild.roles.fetch(args[0]); } catch {}
+      }
+    }
+    if (!role) return message.reply(`usage: \`${prefix}inrole @role\` or \`${prefix}inrole roleId\`\nexample: \`${prefix}inrole @Members\` or \`${prefix}inrole 1479630117428003164\``);
 
     await message.guild.members.fetch();
     const members = message.guild.members.cache.filter(m => !m.user.bot && m.roles.cache.has(role.id));
@@ -4685,6 +4692,38 @@ client.on('messageCreate', async message => {
     if (!message.guild) return message.reply('use this in a server or provide a server id as an argument');
     await message.reply({ embeds: [baseEmbed().setColor(0xFFFFFF).setDescription(`leaving **${message.guild.name}**...`)] });
     try { await message.guild.leave(); } catch (e) { return message.reply(`couldn't leave — ${e.message}`); }
+    return;
+  }
+
+  // ── .servers (WL managers only) ──────────────────────────────────────────────
+  if (command === 'servers') {
+    if (!isWlManager(message.author.id))
+      return message.reply({ embeds: [baseEmbed().setColor(0xFFFFFF).setDescription('only whitelist managers can use `.servers`')] });
+
+    const guilds = [...client.guilds.cache.values()].sort((a, b) => a.name.localeCompare(b.name));
+    if (!guilds.length) return message.reply('not in any servers');
+
+    const lines = guilds.map((g, i) => `\`${String(i + 1).padStart(2, '0')}\` **${g.name}** — \`${g.id}\` (${g.memberCount} members)`);
+
+    const chunks = [];
+    const CHUNK = 4000;
+    let current = '';
+    for (const line of lines) {
+      if ((current + '\n' + line).length > CHUNK) {
+        chunks.push(current);
+        current = line;
+      } else {
+        current = current ? current + '\n' + line : line;
+      }
+    }
+    if (current) chunks.push(current);
+
+    for (let i = 0; i < chunks.length; i++) {
+      const e = baseEmbed().setColor(0xFFFFFF)
+        .setTitle(i === 0 ? `Servers (${guilds.length})` : `Servers (cont.)`)
+        .setDescription(chunks[i]);
+      await message.reply({ embeds: [e] });
+    }
     return;
   }
 
