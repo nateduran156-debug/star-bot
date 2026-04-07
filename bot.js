@@ -311,7 +311,7 @@ async function isUserInGroup(robloxId, groupId) {
     return (json.data || []).some(g => String(g.group?.id) === String(groupId));
   } catch { return false; }
 }
-const ATTEND_GROUP_ID = '206868002';
+const ATTEND_GROUP_ID = '489845165';
 
 // ─── OCR-based username extraction (no API key required) ─────────────────────
 // Uses sharp for image preprocessing and tesseract.js for OCR to extract
