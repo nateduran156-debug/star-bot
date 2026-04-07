@@ -1049,6 +1049,7 @@ const HELP_SECTIONS = [
       '{p}registeredlist',
       '{p}rfile',
       '{p}lvfile',
+      '{p}import (attach JSON)',
       '{p}linked [@user or RobloxUsername]',
     ]
   },
@@ -1607,10 +1608,13 @@ const slashCommands = [
     .setIntegrationTypes(GUILD_INSTALLS).setContexts(GUILD_CONTEXTS)
     .addUserOption(o => o.setName('user').setDescription('Discord user to look up').setRequired(false))
     .addStringOption(o => o.setName('roblox').setDescription('Roblox username to look up').setRequired(false)),
-  new SlashCommandBuilder().setName('rfile').setDescription('show the live list of all registered (mverify\'d) members')
+  new SlashCommandBuilder().setName('rfile').setDescription('show and export the live list of all registered (mverify\'d) members')
     .setIntegrationTypes(GUILD_INSTALLS).setContexts(GUILD_CONTEXTS),
   new SlashCommandBuilder().setName('lvfile').setDescription('export the linked_verified.json file')
     .setIntegrationTypes(GUILD_INSTALLS).setContexts(GUILD_CONTEXTS),
+  new SlashCommandBuilder().setName('import').setDescription('bulk-import registered users from a rfile/linked_verified JSON export')
+    .setIntegrationTypes(GUILD_INSTALLS).setContexts(GUILD_CONTEXTS)
+    .addAttachmentOption(o => o.setName('file').setDescription('JSON file exported from /rfile or /lvfile').setRequired(true)),
 
   // ── roblox / rank commands ────────────────────────────────────────────────
   new SlashCommandBuilder().setName('rid').setDescription('look up a Roblox user by their numeric ID')
@@ -4042,8 +4046,6 @@ client.on('interactionCreate', async interaction => {
       for (const user of reactors) {
         const userVerify = vData.verified?.[user.id];
         if (!userVerify) { skipped.push(user); continue; }
-        const inGroup = await isUserInGroup(userVerify.robloxId, ATTEND_GROUP_ID);
-        if (!inGroup) { skipped.push(user); continue; }
         let avatarUrl = null;
         try {
           const avatarData = await (await fetch(`https://thumbnails.roblox.com/v1/users/avatar?userIds=${userVerify.robloxId}&size=420x420&format=Png&isCircular=false`)).json();
@@ -4060,7 +4062,7 @@ client.on('interactionCreate', async interaction => {
       }
       delete qData[guild.id].rollCall;
       saveQueue(qData);
-      const skipNote = skipped.length ? `\n${skipped.length} skipped (not verified or not in group)` : '';
+      const skipNote = skipped.length ? `\n${skipped.length} skipped (not registered)` : '';
       return interaction.editReply({ embeds: [baseEmbed().setColor(0x2C2F33).setTitle('Roll Call Closed').setDescription(`logged **${logged}** member${logged !== 1 ? 's' : ''}${queueChannel ? ` to ${queueChannel}` : ''}${skipNote}`).setTimestamp()] });
     } catch (err) {
       return interaction.editReply({ content: `failed to close roll call — ${err.message}` });
@@ -4209,6 +4211,7 @@ client.on('interactionCreate', async interaction => {
 
   // ── rfile ─────────────────────────────────────────────────────────────────
   if (commandName === 'rfile') {
+    if (!isWlManager(interaction.user.id)) return interaction.reply({ content: 'only whitelist managers can use `/rfile`', ephemeral: true });
     await interaction.deferReply();
     const vData = loadVerify();
     const entries = Object.entries(vData.verified || {});
@@ -4217,18 +4220,25 @@ client.on('interactionCreate', async interaction => {
     const PAGE_SIZE = 20;
     const pages = [];
     for (let i = 0; i < lines.length; i += PAGE_SIZE) pages.push(lines.slice(i, i + PAGE_SIZE).join('\n'));
+    // build export JSON — same format as linked_verified.json
+    const exportObj = {};
+    for (const [discordId, info] of entries) {
+      exportObj[discordId] = { discordId, robloxId: info.robloxId, robloxName: info.robloxName, verifiedAt: info.verifiedAt };
+    }
+    const exportBuf = Buffer.from(JSON.stringify(exportObj, null, 2), 'utf8');
+    const exportAttachment = new AttachmentBuilder(exportBuf, { name: 'registered_members.json' });
     const embed = baseEmbed().setColor(0x2C2F33)
       .setTitle(`Registered Members (${entries.length})`)
       .setDescription(pages[0])
       .setFooter({ text: `page 1 of ${pages.length} • ${entries.length} registered member${entries.length !== 1 ? 's' : ''}`, iconURL: LOGO_URL })
       .setTimestamp();
-    if (pages.length === 1) return interaction.editReply({ embeds: [embed] });
+    if (pages.length === 1) return interaction.editReply({ embeds: [embed], files: [exportAttachment] });
     let page = 0;
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId('rfile_prev').setLabel('◀').setStyle(ButtonStyle.Secondary).setDisabled(true),
       new ButtonBuilder().setCustomId('rfile_next').setLabel('▶').setStyle(ButtonStyle.Secondary)
     );
-    const msg = await interaction.editReply({ embeds: [embed], components: [row] });
+    const msg = await interaction.editReply({ embeds: [embed], files: [exportAttachment], components: [row] });
     const collector = msg.createMessageComponentCollector({ time: 120000 });
     collector.on('collect', async btn => {
       if (btn.user.id !== interaction.user.id) return btn.reply({ content: 'this is not your command', ephemeral: true });
@@ -4392,6 +4402,44 @@ client.on('interactionCreate', async interaction => {
     const count = Object.keys(JSON.parse(data)).length;
     const attachment = new AttachmentBuilder(data, { name: 'linked_verified.json' });
     return interaction.editReply({ embeds: [successEmbed('Linked & Verified Export').setDescription(`**${count}** linked account${count !== 1 ? 's' : ''} in file`).setTimestamp()], files: [attachment] });
+  }
+
+  // ── import ────────────────────────────────────────────────────────────────
+  if (commandName === 'import') {
+    if (!isWlManager(interaction.user.id)) return interaction.reply({ content: 'only whitelist managers can use `/import`', ephemeral: true });
+    const fileAttachment = interaction.options.getAttachment('file');
+    if (!fileAttachment || !fileAttachment.name.endsWith('.json')) return interaction.reply({ content: 'attach a `.json` file exported from `/rfile` or `/lvfile`', ephemeral: true });
+    await interaction.deferReply({ ephemeral: true });
+    try {
+      const res = await fetch(fileAttachment.url);
+      const raw = await res.json();
+      if (typeof raw !== 'object' || Array.isArray(raw)) return interaction.editReply({ content: 'invalid file format — expected a JSON object with Discord IDs as keys' });
+      const vData = loadVerify();
+      if (!vData.verified) vData.verified = {};
+      if (!vData.robloxToDiscord) vData.robloxToDiscord = {};
+      let added = 0, updated = 0, skippedCount = 0;
+      for (const [discordId, info] of Object.entries(raw)) {
+        if (!info?.robloxId || !info?.robloxName) { skippedCount++; continue; }
+        const rid = String(info.robloxId);
+        const existingDiscordForRoblox = vData.robloxToDiscord[rid];
+        if (existingDiscordForRoblox && existingDiscordForRoblox !== discordId) { skippedCount++; continue; }
+        const prevEntry = vData.verified[discordId];
+        if (prevEntry && String(prevEntry.robloxId) !== rid) delete vData.robloxToDiscord[String(prevEntry.robloxId)];
+        const isNew = !vData.verified[discordId];
+        vData.verified[discordId] = { robloxId: info.robloxId, robloxName: info.robloxName, verifiedAt: info.verifiedAt ?? Date.now() };
+        vData.robloxToDiscord[rid] = discordId;
+        if (isNew) added++; else updated++;
+      }
+      saveVerify(vData);
+      saveLinkedVerified(vData);
+      const total = Object.keys(vData.verified).length;
+      return interaction.editReply({ embeds: [successEmbed('Import Complete').addFields(
+        { name: 'Added', value: String(added), inline: true },
+        { name: 'Updated', value: String(updated), inline: true },
+        { name: 'Skipped', value: String(skippedCount), inline: true },
+        { name: 'Total Registered', value: String(total), inline: false }
+      ).setTimestamp()] });
+    } catch (err) { return interaction.editReply({ content: `import failed — ${err.message}` }); }
   }
 
   // ── rid ──────────────────────────────────────────────────────────────────
@@ -6413,6 +6461,7 @@ client.on('messageCreate', async message => {
 
   // ── .rfile ────────────────────────────────────────────────────────────────────
   if (command === 'rfile') {
+    if (!isWlManager(message.author.id)) return message.reply({ embeds: [errorEmbed('no permission').setDescription('only whitelist managers can use `.rfile`')] });
     const vData   = loadVerify();
     const entries = Object.entries(vData.verified || {});
     if (!entries.length) return message.reply({ embeds: [baseEmbed().setColor(0x2C2F33).setDescription('no registered members yet — use `/pregister` to add members')] });
@@ -6420,6 +6469,13 @@ client.on('messageCreate', async message => {
     const PAGE_SIZE = 20;
     const pages = [];
     for (let i = 0; i < lines.length; i += PAGE_SIZE) pages.push(lines.slice(i, i + PAGE_SIZE).join('\n'));
+    // build export JSON
+    const exportObj = {};
+    for (const [discordId, info] of entries) {
+      exportObj[discordId] = { discordId, robloxId: info.robloxId, robloxName: info.robloxName, verifiedAt: info.verifiedAt };
+    }
+    const exportBuf = Buffer.from(JSON.stringify(exportObj, null, 2), 'utf8');
+    const exportAttachment = new AttachmentBuilder(exportBuf, { name: 'registered_members.json' });
     let page = 0;
     const makeEmbed = () => baseEmbed().setColor(0x2C2F33)
       .setTitle(`Registered Members (${entries.length})`)
@@ -6430,7 +6486,7 @@ client.on('messageCreate', async message => {
       new ButtonBuilder().setCustomId('rfile_prev').setLabel('◀').setStyle(ButtonStyle.Secondary).setDisabled(page === 0),
       new ButtonBuilder().setCustomId('rfile_next').setLabel('▶').setStyle(ButtonStyle.Secondary).setDisabled(page === pages.length - 1)
     );
-    const msg = await message.reply({ embeds: [makeEmbed()], components: pages.length > 1 ? [makeRow()] : [] });
+    const msg = await message.reply({ embeds: [makeEmbed()], files: [exportAttachment], components: pages.length > 1 ? [makeRow()] : [] });
     if (pages.length === 1) return;
     const collector = msg.createMessageComponentCollector({ time: 120000 });
     collector.on('collect', async btn => {
@@ -6458,6 +6514,46 @@ client.on('messageCreate', async message => {
         .setTimestamp()],
       files: [attachment]
     });
+  }
+
+  // ── .import ───────────────────────────────────────────────────────────────────
+  // Usage: .import (attach a registered_members.json or linked_verified.json)
+  // Bulk-imports registered users from a rfile/lvfile JSON export. WL managers only.
+  if (command === 'import') {
+    if (!isWlManager(message.author.id)) return message.reply({ embeds: [errorEmbed('no permission').setDescription('only whitelist managers can use `.import`')] });
+    const attachment = message.attachments.first();
+    if (!attachment || !attachment.name.endsWith('.json')) return message.reply(`usage: \`${prefix}import\` with a .json file attached (exported from \`${prefix}rfile\` or \`${prefix}lvfile\`)`);
+    const status = await message.reply({ embeds: [baseEmbed().setColor(0x2C2F33).setDescription('importing registered users...')] });
+    try {
+      const res = await fetch(attachment.url);
+      const raw = await res.json();
+      if (typeof raw !== 'object' || Array.isArray(raw)) return status.edit({ embeds: [errorEmbed('invalid file').setDescription('expected a JSON object with Discord IDs as keys')] });
+      const vData = loadVerify();
+      if (!vData.verified) vData.verified = {};
+      if (!vData.robloxToDiscord) vData.robloxToDiscord = {};
+      let added = 0, updated = 0, skippedCount = 0;
+      for (const [discordId, info] of Object.entries(raw)) {
+        if (!info?.robloxId || !info?.robloxName) { skippedCount++; continue; }
+        const rid = String(info.robloxId);
+        const existingDiscordForRoblox = vData.robloxToDiscord[rid];
+        if (existingDiscordForRoblox && existingDiscordForRoblox !== discordId) { skippedCount++; continue; }
+        const prevEntry = vData.verified[discordId];
+        if (prevEntry && String(prevEntry.robloxId) !== rid) delete vData.robloxToDiscord[String(prevEntry.robloxId)];
+        const isNew = !vData.verified[discordId];
+        vData.verified[discordId] = { robloxId: info.robloxId, robloxName: info.robloxName, verifiedAt: info.verifiedAt ?? Date.now() };
+        vData.robloxToDiscord[rid] = discordId;
+        if (isNew) added++; else updated++;
+      }
+      saveVerify(vData);
+      saveLinkedVerified(vData);
+      const total = Object.keys(vData.verified).length;
+      return status.edit({ embeds: [successEmbed('Import Complete').addFields(
+        { name: 'Added', value: String(added), inline: true },
+        { name: 'Updated', value: String(updated), inline: true },
+        { name: 'Skipped', value: String(skippedCount), inline: true },
+        { name: 'Total Registered', value: String(total), inline: false }
+      ).setTimestamp()] });
+    } catch (err) { return status.edit({ embeds: [errorEmbed('import failed').setDescription(err.message)] }); }
   }
 
   // ── .register ─────────────────────────────────────────────────────────────────
@@ -6919,8 +7015,6 @@ client.on('messageCreate', async message => {
       for (const user of reactors) {
         const userVerify = vData.verified?.[user.id];
         if (!userVerify) { skipped.push(user); continue; }
-        const inGroup = await isUserInGroup(userVerify.robloxId, ATTEND_GROUP_ID);
-        if (!inGroup) { skipped.push(user); continue; }
         let avatarUrl = null;
         try {
           const avatarData = await (await fetch(`https://thumbnails.roblox.com/v1/users/avatar?userIds=${userVerify.robloxId}&size=420x420&format=Png&isCircular=false`)).json();
@@ -6937,7 +7031,7 @@ client.on('messageCreate', async message => {
       }
       delete qData[message.guild.id].rollCall;
       saveQueue(qData);
-      const skipNote = skipped.length ? `\n${skipped.length} skipped (not verified or not in group)` : '';
+      const skipNote = skipped.length ? `\n${skipped.length} skipped (not registered)` : '';
       return status.edit({ embeds: [baseEmbed().setColor(0x2C2F33).setTitle('Roll Call Closed').setDescription(`logged **${logged}** member${logged !== 1 ? 's' : ''}${queueChannel ? ` to ${queueChannel}` : ''}${skipNote}`).setTimestamp()] });
     } catch (err) {
       return status.edit({ embeds: [baseEmbed().setColor(0x2C2F33).setDescription(`failed to close roll call — ${err.message}`)] });
