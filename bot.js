@@ -1045,11 +1045,10 @@ const HELP_SECTIONS = [
     title: 'Attendance',
     commands: [
       '{p}register RobloxUsername',
+      '{p}pregister RobloxUsername @user',
       '{p}registeredlist',
       '{p}rfile',
       '{p}lvfile',
-      '{p}mverify @user RobloxUsername',
-      '{p}munverify @user',
       '{p}linked [@user or RobloxUsername]',
     ]
   },
@@ -1088,6 +1087,9 @@ const HELP_SECTIONS = [
   {
     title: 'Admin',
     commands: [
+      '{p}verify @user',
+      '{p}verify role set @role',
+      '{p}verify role remove',
       '{p}prefix [new prefix]',
       '{p}status [type] [text]',
       '{p}setlog #channel',
@@ -1641,14 +1643,22 @@ const slashCommands = [
     .setIntegrationTypes(GUILD_INSTALLS).setContexts(GUILD_CONTEXTS)
     .addAttachmentOption(o => o.setName('image').setDescription('image file to convert').setRequired(true)),
 
-  // ── manual verify ─────────────────────────────────────────────────────────
-  new SlashCommandBuilder().setName('mverify').setDescription('manually link a Discord user to a Roblox account (whitelist only)')
+  // ── verify ────────────────────────────────────────────────────────────────
+  new SlashCommandBuilder().setName('verify').setDescription('give the verify role to a user, or configure the verify role')
     .setIntegrationTypes(GUILD_INSTALLS).setContexts(GUILD_CONTEXTS)
-    .addUserOption(o => o.setName('user').setDescription('Discord member to verify').setRequired(true))
-    .addStringOption(o => o.setName('roblox').setDescription('Roblox username to link them to').setRequired(true)),
-  new SlashCommandBuilder().setName('munverify').setDescription('manually remove a Discord-to-Roblox link (whitelist only)')
+    .addSubcommand(sub => sub.setName('user').setDescription('give the verify role to a user')
+      .addUserOption(o => o.setName('user').setDescription('user to verify').setRequired(true)))
+    .addSubcommand(sub => sub.setName('role').setDescription('set or remove the verify role')
+      .addStringOption(o => o.setName('action').setDescription('what to do').setRequired(true)
+        .addChoices({ name: 'set', value: 'set' }, { name: 'remove', value: 'remove' }))
+      .addRoleOption(o => o.setName('role').setDescription('role to use (required for set)').setRequired(false))),
+
+  // ── proxy register ────────────────────────────────────────────────────────
+  new SlashCommandBuilder().setName('pregister').setDescription('register another Discord user to a Roblox account (WL managers only)')
     .setIntegrationTypes(GUILD_INSTALLS).setContexts(GUILD_CONTEXTS)
-    .addUserOption(o => o.setName('user').setDescription('Discord member to unlink').setRequired(true)),
+    .addStringOption(o => o.setName('roblox').setDescription('Roblox username').setRequired(true))
+    .addUserOption(o => o.setName('user').setDescription('Discord user to register').setRequired(false))
+    .addStringOption(o => o.setName('userid').setDescription('Discord user ID (if not in server)').setRequired(false)),
 
   // ── tag commands ──────────────────────────────────────────────────────────
   new SlashCommandBuilder().setName('tag').setDescription('create a tag or rank someone using a tag')
@@ -4057,17 +4067,23 @@ client.on('interactionCreate', async interaction => {
     }
   }
 
-  // ── mverify ──────────────────────────────────────────────────────────────
-  // Manually link a Discord user to a Roblox account without the bio-code step.
-  // Whitelist-only command for staff to force-verify members.
-  if (commandName === 'mverify') {
+  // ── /pregister ────────────────────────────────────────────────────────────────
+  if (commandName === 'pregister') {
     if (!guild) return interaction.reply({ content: 'this only works in a server', ephemeral: true });
-    if (!loadWhitelist().includes(interaction.user.id) && !isWlManager(interaction.user.id))
-      return interaction.reply({ content: 'only whitelisted staff can manually verify members', ephemeral: true });
+    if (!isWlManager(interaction.user.id)) return interaction.reply({ content: 'only whitelist managers can use `/pregister`', ephemeral: true });
 
-    const targetUser = interaction.options.getUser('user');
-    const robloxInput = interaction.options.getString('roblox')?.trim();
-    if (!targetUser || !robloxInput) return interaction.reply({ content: 'provide both a Discord user and a Roblox username', ephemeral: true });
+    const robloxInput  = interaction.options.getString('roblox')?.trim();
+    const targetUser   = interaction.options.getUser('user');
+    const rawId        = interaction.options.getString('userid')?.trim();
+
+    if (!targetUser && !rawId) return interaction.reply({ content: 'provide a Discord user via the `user` option or their ID via `userid`', ephemeral: true });
+    const discordId = targetUser ? targetUser.id : rawId.replace(/[<@!>]/g, '');
+    if (!/^\d{17,20}$/.test(discordId)) return interaction.reply({ content: "that doesn't look like a valid Discord user ID", ephemeral: true });
+
+    let resolvedUser = targetUser;
+    if (!resolvedUser) {
+      try { resolvedUser = await client.users.fetch(discordId); } catch { return interaction.reply({ content: "couldn't find that Discord user", ephemeral: true }); }
+    }
 
     await interaction.deferReply();
     try {
@@ -4082,68 +4098,76 @@ client.on('interactionCreate', async interaction => {
       if (!vData.verified) vData.verified = {};
       if (!vData.robloxToDiscord) vData.robloxToDiscord = {};
 
-      // Check if this Roblox account is already linked to a different Discord user
       const existingDiscordId = vData.robloxToDiscord[String(robloxUser.id)];
-      if (existingDiscordId && existingDiscordId !== targetUser.id) {
+      if (existingDiscordId && existingDiscordId !== discordId) {
         return interaction.editReply({ embeds: [baseEmbed().setColor(0x2C2F33)
-          .setDescription(`\`${robloxUser.name}\` is already linked to <@${existingDiscordId}> — unlink them first with \`/munverify\``)] });
+          .setDescription(`\`${robloxUser.name}\` is already registered to a different Discord account`)] });
       }
 
-      // Remove any previous Roblox link the Discord user had
-      const prevEntry = vData.verified[targetUser.id];
+      const prevEntry = vData.verified[discordId];
       if (prevEntry && String(prevEntry.robloxId) !== String(robloxUser.id)) {
         delete vData.robloxToDiscord[String(prevEntry.robloxId)];
       }
 
-      vData.verified[targetUser.id]              = { robloxId: robloxUser.id, robloxName: robloxUser.name, verifiedAt: Date.now(), manualBy: interaction.user.id };
-      vData.robloxToDiscord[String(robloxUser.id)] = targetUser.id;
+      vData.verified[discordId]                    = { robloxId: robloxUser.id, robloxName: robloxUser.name, verifiedAt: Date.now() };
+      vData.robloxToDiscord[String(robloxUser.id)] = discordId;
       saveVerify(vData);
       saveLinkedVerified(vData);
 
       const avatarData = await (await fetch(`https://thumbnails.roblox.com/v1/users/avatar?userIds=${robloxUser.id}&size=420x420&format=Png&isCircular=false`)).json();
-      const avatarUrl = avatarData.data?.[0]?.imageUrl ?? null;
+      const avatarUrl  = avatarData.data?.[0]?.imageUrl ?? null;
 
       return interaction.editReply({ embeds: [baseEmbed().setColor(0x2C2F33)
-        .setTitle('Manual Verification Successful')
+        .setTitle('Registration Successful')
         .setThumbnail(avatarUrl ?? LOGO_URL)
-        .setDescription(`<@${targetUser.id}> has been manually linked to **${robloxUser.name}**`)
+        .setDescription(`<@${discordId}> is now registered as **${robloxUser.name}**`)
         .addFields(
-          { name: 'Discord', value: `<@${targetUser.id}>`, inline: true },
-          { name: 'Roblox',  value: `[\`${robloxUser.name}\`](https://www.roblox.com/users/${robloxUser.id}/profile)`, inline: true },
-          { name: 'Verified by', value: `<@${interaction.user.id}>`, inline: true }
+          { name: 'Discord',       value: `<@${discordId}>`, inline: true },
+          { name: 'Roblox',        value: `[\`${robloxUser.name}\`](https://www.roblox.com/users/${robloxUser.id}/profile)`, inline: true },
+          { name: 'registered by', value: `<@${interaction.user.id}>`, inline: true }
         ).setTimestamp()] });
-    } catch (err) { return interaction.editReply({ embeds: [baseEmbed().setColor(0x2C2F33).setDescription(`mverify failed — ${err.message}`)] }); }
+    } catch (err) { return interaction.editReply({ content: `pregister failed — ${err.message}` }); }
   }
 
-  // ── munverify ────────────────────────────────────────────────────────────
-  // Manually remove a Discord-to-Roblox link. Whitelist-only.
-  if (commandName === 'munverify') {
+  // ── /verify ───────────────────────────────────────────────────────────────────
+  if (commandName === 'verify') {
     if (!guild) return interaction.reply({ content: 'this only works in a server', ephemeral: true });
-    if (!loadWhitelist().includes(interaction.user.id) && !isWlManager(interaction.user.id))
-      return interaction.reply({ content: 'only whitelisted staff can manually unverify members', ephemeral: true });
+    if (!isWlManager(interaction.user.id)) return interaction.reply({ content: 'only whitelist managers can use `/verify`', ephemeral: true });
+    const sub = interaction.options.getSubcommand();
 
-    const targetUser = interaction.options.getUser('user');
-    if (!targetUser) return interaction.reply({ content: 'provide a Discord user to unlink', ephemeral: true });
+    if (sub === 'role') {
+      const action = interaction.options.getString('action');
+      if (action === 'set') {
+        const role = interaction.options.getRole('role');
+        if (!role) return interaction.reply({ content: 'provide a role to set', ephemeral: true });
+        const cfg = loadConfig(); cfg.verifyRoleId = role.id; saveConfig(cfg);
+        return interaction.reply({ embeds: [baseEmbed().setColor(0x2C2F33).setTitle('verify role set')
+          .addFields({ name: 'role', value: `${role}`, inline: true }, { name: 'set by', value: interaction.user.tag, inline: true }).setTimestamp()] });
+      }
+      if (action === 'remove') {
+        const cfg = loadConfig(); delete cfg.verifyRoleId; saveConfig(cfg);
+        return interaction.reply({ embeds: [baseEmbed().setColor(0x2C2F33).setDescription('verify role removed')] });
+      }
+    }
 
-    const vData = loadVerify();
-    const entry = vData.verified?.[targetUser.id];
-    if (!entry) return interaction.reply({ embeds: [baseEmbed().setColor(0x2C2F33).setDescription(`<@${targetUser.id}> has no linked Roblox account`)], ephemeral: true });
-
-    const robloxName = entry.robloxName;
-    delete vData.verified[targetUser.id];
-    delete vData.robloxToDiscord[String(entry.robloxId)];
-    delete vData.pending?.[targetUser.id];
-    saveVerify(vData);
-    saveLinkedVerified(vData);
-
-    return interaction.reply({ embeds: [baseEmbed().setColor(0x2C2F33)
-      .setTitle('Manual Unverify Successful')
-      .setDescription(`<@${targetUser.id}> has been unlinked from **${robloxName}**`)
-      .addFields(
-        { name: 'Discord', value: `<@${targetUser.id}>`, inline: true },
-        { name: 'Roblox',  value: `\`${robloxName}\``, inline: true },
-        { name: 'Removed by', value: `<@${interaction.user.id}>`, inline: true }
-      ).setTimestamp()] });
+    if (sub === 'user') {
+      const cfg = loadConfig();
+      if (!cfg.verifyRoleId) return interaction.reply({ content: 'no verify role set — use `/verify role set` first', ephemeral: true });
+      const target = interaction.options.getMember('user');
+      if (!target) return interaction.reply({ content: "couldn't find that member", ephemeral: true });
+      const role = guild.roles.cache.get(cfg.verifyRoleId);
+      if (!role) return interaction.reply({ content: "couldn't find the configured verify role — it may have been deleted", ephemeral: true });
+      if (target.roles.cache.has(role.id)) return interaction.reply({ embeds: [baseEmbed().setColor(0x2C2F33).setDescription(`<@${target.id}> already has ${role}`)], ephemeral: true });
+      try {
+        await target.roles.add(role);
+        return interaction.reply({ embeds: [baseEmbed().setColor(0x2C2F33).setTitle('verified')
+          .addFields(
+            { name: 'user',        value: `<@${target.id}>`, inline: true },
+            { name: 'role',        value: `${role}`, inline: true },
+            { name: 'verified by', value: interaction.user.tag, inline: true }
+          ).setTimestamp()] });
+      } catch { return interaction.reply({ content: "couldn't add the role — check my permissions", ephemeral: true }); }
+    }
   }
 
   // ── registeredlist ──────────────────────────────────────────────────────
@@ -4188,7 +4212,7 @@ client.on('interactionCreate', async interaction => {
     await interaction.deferReply();
     const vData = loadVerify();
     const entries = Object.entries(vData.verified || {});
-    if (!entries.length) return interaction.editReply({ embeds: [baseEmbed().setColor(0x2C2F33).setDescription('no registered members yet — use `/mverify` to add members')] });
+    if (!entries.length) return interaction.editReply({ embeds: [baseEmbed().setColor(0x2C2F33).setDescription('no registered members yet — use `/pregister` to add members')] });
     const lines = entries.map(([discordId, { robloxName }]) => `<@${discordId}> — \`${robloxName}\``);
     const PAGE_SIZE = 20;
     const pages = [];
@@ -6391,7 +6415,7 @@ client.on('messageCreate', async message => {
   if (command === 'rfile') {
     const vData   = loadVerify();
     const entries = Object.entries(vData.verified || {});
-    if (!entries.length) return message.reply({ embeds: [baseEmbed().setColor(0x2C2F33).setDescription('no registered members yet — use `/mverify` to add members')] });
+    if (!entries.length) return message.reply({ embeds: [baseEmbed().setColor(0x2C2F33).setDescription('no registered members yet — use `/pregister` to add members')] });
     const lines = entries.map(([discordId, { robloxName }]) => `<@${discordId}> — \`${robloxName}\``);
     const PAGE_SIZE = 20;
     const pages = [];
@@ -6487,6 +6511,114 @@ client.on('messageCreate', async message => {
     } catch (err) { return message.reply(`register failed — ${err.message}`); }
   }
 
+  // ── .pregister ────────────────────────────────────────────────────────────────
+  // Usage: .pregister RobloxUsername @user (or userId)
+  // Registers another Discord user to a Roblox account. WL managers only.
+  if (command === 'pregister') {
+    if (!message.guild) return;
+    if (!isWlManager(message.author.id)) return message.reply({ embeds: [baseEmbed().setColor(0x2C2F33).setDescription('only whitelist managers can use `.pregister`')] });
+    const robloxInput = args[0]?.trim();
+    const discordRaw  = args[1]?.trim();
+    if (!robloxInput || !discordRaw) return message.reply(`usage: \`${prefix}pregister RobloxUsername @user\``);
+
+    // resolve discord user — support mention or raw id
+    const discordId = discordRaw.replace(/[<@!>]/g, '');
+    if (!/^\d{17,20}$/.test(discordId)) return message.reply('provide a valid Discord user mention or ID as the second argument');
+    let discordUser;
+    try { discordUser = await client.users.fetch(discordId); } catch { return message.reply("couldn't find that Discord user"); }
+
+    try {
+      const res = await (await fetch('https://users.roblox.com/v1/usernames/users', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ usernames: [robloxInput], excludeBannedUsers: false })
+      })).json();
+      const robloxUser = res.data?.[0];
+      if (!robloxUser) return message.reply({ embeds: [baseEmbed().setColor(0x2C2F33).setDescription(`couldn't find a Roblox user named \`${robloxInput}\``)] });
+
+      const vData = loadVerify();
+      if (!vData.verified) vData.verified = {};
+      if (!vData.robloxToDiscord) vData.robloxToDiscord = {};
+
+      const existingDiscordId = vData.robloxToDiscord[String(robloxUser.id)];
+      if (existingDiscordId && existingDiscordId !== discordId) {
+        return message.reply({ embeds: [baseEmbed().setColor(0x2C2F33)
+          .setDescription(`\`${robloxUser.name}\` is already registered to a different Discord account`)] });
+      }
+
+      const prevEntry = vData.verified[discordId];
+      if (prevEntry && String(prevEntry.robloxId) !== String(robloxUser.id)) {
+        delete vData.robloxToDiscord[String(prevEntry.robloxId)];
+      }
+
+      vData.verified[discordId]                    = { robloxId: robloxUser.id, robloxName: robloxUser.name, verifiedAt: Date.now() };
+      vData.robloxToDiscord[String(robloxUser.id)] = discordId;
+      saveVerify(vData);
+      saveLinkedVerified(vData);
+
+      const avatarData = await (await fetch(`https://thumbnails.roblox.com/v1/users/avatar?userIds=${robloxUser.id}&size=420x420&format=Png&isCircular=false`)).json();
+      const avatarUrl  = avatarData.data?.[0]?.imageUrl ?? null;
+
+      return message.reply({ embeds: [baseEmbed().setColor(0x2C2F33)
+        .setTitle('Registration Successful')
+        .setThumbnail(avatarUrl ?? LOGO_URL)
+        .setDescription(`<@${discordId}> is now registered as **${robloxUser.name}**`)
+        .addFields(
+          { name: 'Discord',       value: `<@${discordId}>`, inline: true },
+          { name: 'Roblox',        value: `[\`${robloxUser.name}\`](https://www.roblox.com/users/${robloxUser.id}/profile)`, inline: true },
+          { name: 'registered by', value: `<@${message.author.id}>`, inline: true }
+        ).setTimestamp()] });
+    } catch (err) { return message.reply(`pregister failed — ${err.message}`); }
+  }
+
+  // ── .verify ───────────────────────────────────────────────────────────────────
+  // .verify @user            — gives the configured verify role to a user
+  // .verify role set @role   — sets which role is given on verify
+  // .verify role remove      — clears the verify role
+  if (command === 'verify') {
+    if (!message.guild) return;
+    if (!isWlManager(message.author.id)) return message.reply({ embeds: [baseEmbed().setColor(0x2C2F33).setDescription('only whitelist managers can use `.verify`')] });
+
+    const sub = args[0]?.toLowerCase();
+
+    // .verify role set / remove
+    if (sub === 'role') {
+      const action = args[1]?.toLowerCase();
+      if (action === 'set') {
+        const role = message.mentions.roles.first();
+        if (!role) return message.reply('mention a role — e.g. `.verify role set @Verified`');
+        const cfg = loadConfig(); cfg.verifyRoleId = role.id; saveConfig(cfg);
+        return message.reply({ embeds: [baseEmbed().setColor(0x2C2F33).setTitle('verify role set')
+          .addFields({ name: 'role', value: `${role}`, inline: true }, { name: 'set by', value: message.author.tag, inline: true }).setTimestamp()] });
+      }
+      if (action === 'remove') {
+        const cfg = loadConfig(); delete cfg.verifyRoleId; saveConfig(cfg);
+        return message.reply({ embeds: [baseEmbed().setColor(0x2C2F33).setDescription('verify role removed')] });
+      }
+      return message.reply(`usage: \`${prefix}verify role set @role\` or \`${prefix}verify role remove\``);
+    }
+
+    // .verify @user
+    const cfg = loadConfig();
+    if (!cfg.verifyRoleId) return message.reply(`no verify role set — use \`${prefix}verify role set @role\` first`);
+    let target = message.mentions.members?.first();
+    if (!target && args[0] && /^\d{17,20}$/.test(args[0])) {
+      try { target = await message.guild.members.fetch(args[0]); } catch {}
+    }
+    if (!target) return message.reply(`usage: \`${prefix}verify @user\``);
+    const role = message.guild.roles.cache.get(cfg.verifyRoleId);
+    if (!role) return message.reply("couldn't find the configured verify role — it may have been deleted");
+    if (target.roles.cache.has(role.id)) return message.reply({ embeds: [baseEmbed().setColor(0x2C2F33).setDescription(`${target} already has ${role}`)] });
+    try {
+      await target.roles.add(role);
+      return message.reply({ embeds: [baseEmbed().setColor(0x2C2F33).setTitle('verified')
+        .addFields(
+          { name: 'user',        value: `${target}`, inline: true },
+          { name: 'role',        value: `${role}`, inline: true },
+          { name: 'verified by', value: message.author.tag, inline: true }
+        ).setTimestamp()] });
+    } catch { return message.reply("couldn't add the role — check my permissions"); }
+  }
+
   // ── .registeredlist ───────────────────────────────────────────────────────────
   if (command === 'registeredlist') {
     const vData   = loadVerify();
@@ -6537,106 +6669,6 @@ client.on('messageCreate', async message => {
     });
     collector.on('end', () => reply.edit({ components: [] }).catch(() => {}));
     return;
-  }
-
-  // ── .mverify ──────────────────────────────────────────────────────────────────
-  // Usage: .mverify @discordUser RobloxUsername
-  // Manually links a Discord user to a Roblox account without the bio-code step.
-  // Whitelist-only.
-  if (command === 'mverify') {
-    if (!message.guild) return;
-    if (!loadWhitelist().includes(message.author.id) && !isWlManager(message.author.id))
-      return message.reply({ embeds: [baseEmbed().setColor(0x2C2F33).setDescription('only whitelisted staff can manually verify members')] });
-
-    // Support both @mention and raw Discord ID
-    let resolvedUser = message.mentions.users.first();
-    if (!resolvedUser && args[0] && /^\d{17,20}$/.test(args[0])) {
-      try { resolvedUser = await client.users.fetch(args[0]); } catch {}
-    }
-    const robloxInput = message.mentions.users.size > 0 ? args[1]?.trim() : args[0]?.trim();
-
-    if (!resolvedUser || !robloxInput)
-      return message.reply(`usage: \`${prefix}mverify @user RobloxUsername\``);
-
-    try {
-      const res = await (await fetch('https://users.roblox.com/v1/usernames/users', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ usernames: [robloxInput], excludeBannedUsers: false })
-      })).json();
-      const robloxUser = res.data?.[0];
-      if (!robloxUser)
-        return message.reply({ embeds: [baseEmbed().setColor(0x2C2F33).setDescription(`couldn't find a Roblox user named \`${robloxInput}\``)] });
-
-      const vData = loadVerify();
-      if (!vData.verified) vData.verified = {};
-      if (!vData.robloxToDiscord) vData.robloxToDiscord = {};
-
-      const existingDiscordId = vData.robloxToDiscord[String(robloxUser.id)];
-      if (existingDiscordId && existingDiscordId !== resolvedUser.id) {
-        return message.reply({ embeds: [baseEmbed().setColor(0x2C2F33)
-          .setDescription(`\`${robloxUser.name}\` is already linked to <@${existingDiscordId}> — use \`${prefix}munverify @user\` to unlink them first`)] });
-      }
-
-      const prevEntry = vData.verified[resolvedUser.id];
-      if (prevEntry && String(prevEntry.robloxId) !== String(robloxUser.id)) {
-        delete vData.robloxToDiscord[String(prevEntry.robloxId)];
-      }
-
-      vData.verified[resolvedUser.id]              = { robloxId: robloxUser.id, robloxName: robloxUser.name, verifiedAt: Date.now(), manualBy: message.author.id };
-      vData.robloxToDiscord[String(robloxUser.id)] = resolvedUser.id;
-      saveVerify(vData);
-      saveLinkedVerified(vData);
-
-      const avatarData = await (await fetch(`https://thumbnails.roblox.com/v1/users/avatar?userIds=${robloxUser.id}&size=420x420&format=Png&isCircular=false`)).json();
-      const avatarUrl = avatarData.data?.[0]?.imageUrl ?? null;
-
-      return message.reply({ embeds: [baseEmbed().setColor(0x2C2F33)
-        .setTitle('Manual Verification Successful')
-        .setThumbnail(avatarUrl ?? LOGO_URL)
-        .setDescription(`<@${resolvedUser.id}> has been manually linked to **${robloxUser.name}**`)
-        .addFields(
-          { name: 'Discord', value: `<@${resolvedUser.id}>`, inline: true },
-          { name: 'Roblox',  value: `[\`${robloxUser.name}\`](https://www.roblox.com/users/${robloxUser.id}/profile)`, inline: true },
-          { name: 'Verified by', value: message.author.tag, inline: true }
-        ).setTimestamp()] });
-    } catch (err) { return message.reply(`mverify failed — ${err.message}`); }
-  }
-
-  // ── .munverify ────────────────────────────────────────────────────────────────
-  // Usage: .munverify @discordUser
-  // Manually removes a Discord-to-Roblox link. Whitelist-only.
-  if (command === 'munverify') {
-    if (!message.guild) return;
-    if (!loadWhitelist().includes(message.author.id) && !isWlManager(message.author.id))
-      return message.reply({ embeds: [baseEmbed().setColor(0x2C2F33).setDescription('only whitelisted staff can manually unverify members')] });
-
-    let resolvedUser = message.mentions.users.first();
-    if (!resolvedUser && args[0] && /^\d{17,20}$/.test(args[0])) {
-      try { resolvedUser = await client.users.fetch(args[0]); } catch {}
-    }
-    if (!resolvedUser)
-      return message.reply(`usage: \`${prefix}munverify @user\``);
-
-    const vData = loadVerify();
-    const entry = vData.verified?.[resolvedUser.id];
-    if (!entry)
-      return message.reply({ embeds: [baseEmbed().setColor(0x2C2F33).setDescription(`<@${resolvedUser.id}> has no linked Roblox account`)] });
-
-    const robloxName = entry.robloxName;
-    delete vData.verified[resolvedUser.id];
-    delete vData.robloxToDiscord[String(entry.robloxId)];
-    if (vData.pending?.[resolvedUser.id]) delete vData.pending[resolvedUser.id];
-    saveVerify(vData);
-    saveLinkedVerified(vData);
-
-    return message.reply({ embeds: [baseEmbed().setColor(0x2C2F33)
-      .setTitle('Manual Unverify Successful')
-      .setDescription(`<@${resolvedUser.id}> has been unlinked from **${robloxName}**`)
-      .addFields(
-        { name: 'Discord', value: `<@${resolvedUser.id}>`, inline: true },
-        { name: 'Roblox',  value: `\`${robloxName}\``, inline: true },
-        { name: 'Removed by', value: message.author.tag, inline: true }
-      ).setTimestamp()] });
   }
 
   if (command === 'linked') {
