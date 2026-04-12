@@ -27,7 +27,8 @@ const client = new Client({
 })
 
 // logo and stuff
-const LOGO_URL = 'https://image2url.com/r2/default/images/1775525915147-4d88601d-cd66-4e98-8ca9-61cd2e33f5d1.png'
+const DEFAULT_LOGO_URL = 'https://image2url.com/r2/default/images/1775525915147-4d88601d-cd66-4e98-8ca9-61cd2e33f5d1.png'
+const getLogoUrl = () => { const cfg = loadJSON(path.join(__dirname, 'config.json')); return cfg.logoUrl || DEFAULT_LOGO_URL }
 const MOD_IMAGE_URL = 'https://i.imgur.com/CBDoIWa.png'
 const MTXX_GROUP_ID = '489845165'
 const MTXX_GROUP_LINK = 'https://www.roblox.com/communities/489845165/fraidfg#!/about'
@@ -35,14 +36,14 @@ const MTXX_GROUP_LINK = 'https://www.roblox.com/communities/489845165/fraidfg#!/
 // ─── Modern "Sins" embed system ───────────────────────────────────────────────
 // Every embed gets: author line (Sins + logo), logo thumbnail top-right,
 // bold title via setTitle, timestamp, and footer — the full discohook look.
-const getBotName = () => client.user?.username ?? 'Bot'
+const getBotName = () => { const cfg = loadJSON(path.join(__dirname, 'config.json')); return cfg.customName || client.user?.username || 'Bot' }
 
 function baseEmbed() {
   return new EmbedBuilder()
-    .setAuthor({ name: getBotName(), iconURL: LOGO_URL })
-    .setThumbnail(LOGO_URL)
+    .setAuthor({ name: getBotName(), iconURL: getLogoUrl() })
+    .setThumbnail(getLogoUrl())
     .setTimestamp()
-    .setFooter({ text: getBotName(), iconURL: LOGO_URL })
+    .setFooter({ text: getBotName(), iconURL: getLogoUrl() })
 }
 
 // unified dark grey color palette
@@ -654,9 +655,9 @@ async function runScanCommand(attachments, guild, qCh, ulCh, editFn) {
       const avatarData = await (await fetch(`https://thumbnails.roblox.com/v1/users/avatar?userIds=${robloxUser.id}&size=420x420&format=Png&isCircular=false`)).json()
       avatarUrl = avatarData.data?.[0]?.imageUrl ?? null
     } catch {}
-    const attendEmbed = new EmbedBuilder().setColor(0x2C2F33).setTitle('registered user joined this raid').setAuthor({ name: getBotName(), iconURL: LOGO_URL })
+    const attendEmbed = new EmbedBuilder().setColor(0x2C2F33).setTitle('registered user joined this raid').setAuthor({ name: getBotName(), iconURL: getLogoUrl() })
       .addFields({ name: 'Discord', value: `<@${discordId}>`, inline: false }, { name: 'Roblox', value: `\`${robloxUser.name}\``, inline: false })
-      .setTimestamp().setFooter({ text: getBotName(), iconURL: LOGO_URL })
+      .setTimestamp().setFooter({ text: getBotName(), iconURL: getLogoUrl() })
     if (avatarUrl) attendEmbed.setThumbnail(avatarUrl)
     await qCh.send({ embeds: [attendEmbed] })
     addRaidStat(guild.id, discordId)
@@ -670,9 +671,9 @@ async function runScanCommand(attachments, guild, qCh, ulCh, editFn) {
       const avatarData = await (await fetch(`https://thumbnails.roblox.com/v1/users/avatar?userIds=${robloxUser.id}&size=420x420&format=Png&isCircular=false`)).json()
       avatarUrl = avatarData.data?.[0]?.imageUrl ?? null
     } catch {}
-    const unregEmbed = new EmbedBuilder().setColor(0x2C2F33).setTitle('unregistered user joined this raid').setAuthor({ name: getBotName(), iconURL: LOGO_URL })
+    const unregEmbed = new EmbedBuilder().setColor(0x2C2F33).setTitle('unregistered user joined this raid').setAuthor({ name: getBotName(), iconURL: getLogoUrl() })
       .addFields({ name: 'Roblox', value: `[\`${robloxUser.name}\`](https://www.roblox.com/users/${robloxUser.id}/profile)`, inline: false }, { name: 'Status', value: 'not mverify\'d', inline: false })
-      .setTimestamp().setFooter({ text: getBotName(), iconURL: LOGO_URL })
+      .setTimestamp().setFooter({ text: getBotName(), iconURL: getLogoUrl() })
     if (avatarUrl) unregEmbed.setThumbnail(avatarUrl)
     await qCh.send({ embeds: [unregEmbed] })
     posted++
@@ -821,9 +822,9 @@ async function runGroupScanCommand(input, guild, qCh, ulCh, editFn) {
     } catch {}
 
     const attendEmbed = new EmbedBuilder().setColor(0x2C2F33).setTitle('registered user joined this raid')
-      .setAuthor({ name: getBotName(), iconURL: LOGO_URL })
+      .setAuthor({ name: getBotName(), iconURL: getLogoUrl() })
       .addFields({ name: 'Discord', value: `<@${discordId}>`, inline: false }, { name: 'Roblox', value: `\`${robloxName}\``, inline: false })
-      .setTimestamp().setFooter({ text: getBotName(), iconURL: LOGO_URL })
+      .setTimestamp().setFooter({ text: getBotName(), iconURL: getLogoUrl() })
     if (avatarUrl) attendEmbed.setThumbnail(avatarUrl)
     await qCh.send({ embeds: [attendEmbed] })
     addRaidStat(guild.id, discordId)
@@ -1137,10 +1138,10 @@ function buildHelpEmbed(page) {
   })
   return new EmbedBuilder()
     .setColor(0x2C2F33)
-    .setAuthor({ name: `${getBotName()} — Help`, iconURL: LOGO_URL })
+    .setAuthor({ name: `${getBotName()} — Help`, iconURL: getLogoUrl() })
     .setTitle(section.title)
     .setDescription(lines.join('\n'))
-    .setFooter({ text: `Page ${page + 1} of ${totalPages}`, iconURL: LOGO_URL })
+    .setFooter({ text: `Page ${page + 1} of ${totalPages}`, iconURL: getLogoUrl() })
     .setTimestamp()
 }
 
@@ -1159,9 +1160,9 @@ function buildGcEmbed(username, groups, avatarUrl, page) {
   const embed = new EmbedBuilder()
     .setColor(0x2C2F33)
     .setTitle('Group Check')
-    .setThumbnail(avatarUrl ?? LOGO_URL)
+    .setThumbnail(avatarUrl ?? getLogoUrl())
     .setDescription(`> Showing groups **${page * GC_PER_PAGE + 1}–${Math.min((page + 1) * GC_PER_PAGE, groups.length)}** of **${groups.length}** total\n\n${groupLines}`)
-    .setFooter({ text: `${getBotName()} • Page ${page + 1} of ${totalPages}`, iconURL: LOGO_URL })
+    .setFooter({ text: `${getBotName()} • Page ${page + 1} of ${totalPages}`, iconURL: getLogoUrl() })
     .setTimestamp();
   if (avatarUrl) embed.setAuthor({ name: username, iconURL: avatarUrl });
   return embed;
@@ -1172,7 +1173,7 @@ function buildGcNotInGroupEmbed(displayName) {
     .setColor(0x2C2F33)
     .setTitle('⛔  Not In Group')
     .setDescription(`**${displayName}** hasn't joined the group yet.\nAsk them to join before verifying.\n\n> **Group ID:** \`${MTXX_GROUP_ID}\`\n> **Link:** [Click to Join](${MTXX_GROUP_LINK})`)
-    .setFooter({ text: `${getBotName()} • /fraid`, iconURL: LOGO_URL })
+    .setFooter({ text: `${getBotName()} • ${getBotName()}`, iconURL: getLogoUrl() })
     .setTimestamp()
 }
 
@@ -1181,7 +1182,7 @@ function buildGcInGroupEmbed(displayName) {
     .setColor(0x2C2F33)
     .setTitle('✅  In Group')
     .setDescription(`**${displayName}** is in the group and ready to be verified.\n\n> **Group ID:** \`${MTXX_GROUP_ID}\`\n> **Link:** [View Group](${MTXX_GROUP_LINK})`)
-    .setFooter({ text: `${getBotName()} • /fraid`, iconURL: LOGO_URL })
+    .setFooter({ text: `${getBotName()} • ${getBotName()}`, iconURL: getLogoUrl() })
     .setTimestamp()
 }
 
@@ -1679,6 +1680,16 @@ const slashCommands = [
   new SlashCommandBuilder().setName('tagstrip').setDescription('set the channel where strip/striptag logs are sent')
     .setIntegrationTypes(GUILD_INSTALLS).setContexts(GUILD_CONTEXTS)
     .addChannelOption(o => o.setName('channel').setDescription('channel for strip logs').setRequired(true)),
+  new SlashCommandBuilder().setName('logo').setDescription('change the embed logo used across the bot')
+    .setIntegrationTypes(GUILD_INSTALLS).setContexts(GUILD_CONTEXTS)
+    .addStringOption(o => o.setName('url').setDescription('image URL for the new logo (leave blank to see current)').setRequired(false))
+    .addStringOption(o => o.setName('action').setDescription('reset to default').setRequired(false)
+      .addChoices({ name: 'reset', value: 'reset' })),
+  new SlashCommandBuilder().setName('name').setDescription('change the bot display name used in all embeds')
+    .setIntegrationTypes(GUILD_INSTALLS).setContexts(GUILD_CONTEXTS)
+    .addStringOption(o => o.setName('text').setDescription('new display name (leave blank to see current)').setRequired(false))
+    .addStringOption(o => o.setName('action').setDescription('reset to default').setRequired(false)
+      .addChoices({ name: 'reset', value: 'reset' })),
 ].map(c => c.toJSON());
 
 // ─── Status helper ────────────────────────────────────────────────────────────
@@ -1992,9 +2003,9 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
                   avatarUrl = avatarData.data?.[0]?.imageUrl ?? null;
                 } catch {}
                 const vcEmbed = new EmbedBuilder().setColor(0x2C2F33).setTitle('registered user joined this raid')
-                  .setAuthor({ name: getBotName(), iconURL: LOGO_URL })
+                  .setAuthor({ name: getBotName(), iconURL: getLogoUrl() })
                   .addFields({ name: 'Discord', value: `<@${member.id}>`, inline: false }, { name: 'Roblox', value: `\`${userVerify.robloxName}\``, inline: false })
-                  .setTimestamp().setFooter({ text: `auto-logged via voice channel • ${getBotName()}`, iconURL: LOGO_URL });
+                  .setTimestamp().setFooter({ text: `auto-logged via voice channel • ${getBotName()}`, iconURL: getLogoUrl() });
                 if (avatarUrl) vcEmbed.setThumbnail(avatarUrl);
                 await queueChannel.send({ embeds: [vcEmbed] });
                 addRaidStat(guildId, member.id);
@@ -2089,9 +2100,9 @@ client.on('interactionCreate', async interaction => {
         avatarUrl = avatarData.data?.[0]?.imageUrl ?? null;
       } catch {}
       const attendEmbed = new EmbedBuilder().setColor(0x2C2F33).setTitle('registered user joined this raid')
-        .setAuthor({ name: getBotName(), iconURL: LOGO_URL })
+        .setAuthor({ name: getBotName(), iconURL: getLogoUrl() })
         .addFields({ name: 'Discord', value: `<@${userId}>`, inline: false }, { name: 'Roblox', value: `\`${userVerify.robloxName}\``, inline: false })
-        .setTimestamp().setFooter({ text: `self-reported • ${getBotName()}`, iconURL: LOGO_URL });
+        .setTimestamp().setFooter({ text: `self-reported • ${getBotName()}`, iconURL: getLogoUrl() });
       if (avatarUrl) attendEmbed.setThumbnail(avatarUrl);
       const queueChannelId = qData[guildId]?.channelId;
       const queueChannel = queueChannelId ? interaction.guild.channels.cache.get(queueChannelId) : null;
@@ -2289,7 +2300,7 @@ client.on('interactionCreate', async interaction => {
       .setColor(0x2C2F33)
       .setTitle(`${platformLabel} Usernames — ${typeLabel}`)
       .setDescription(usernames.length > 0 ? usernames.map(u => `\`${u}\``).join('\n') : 'No available usernames found after checking — try again.')
-      .setFooter({ text: footerText, iconURL: LOGO_URL })
+      .setFooter({ text: footerText, iconURL: getLogoUrl() })
 
     return interaction.editReply({ embeds: [e] })
   }
@@ -2397,7 +2408,7 @@ client.on('interactionCreate', async interaction => {
 
   if (commandName === 'about') {
     return interaction.reply({ embeds: [baseEmbed().setColor(0x2C2F33).setTitle(`About ${client.user.username}`)
-      .setDescription(`A custom Discord bot built for **/fraid**.\n\nUse \`/help\` to see all commands.`)
+      .setDescription(`A custom Discord bot built for **${getBotName()}**.\n\nUse \`/help\` to see all commands.`)
       .addFields(
         { name: 'servers', value: `${client.guilds.cache.size}`, inline: true },
         { name: 'uptime', value: `<t:${Math.floor((Date.now() - client.uptime) / 1000)}:R>`, inline: true }
@@ -2815,6 +2826,51 @@ client.on('interactionCreate', async interaction => {
       .addFields({ name: setting, value: value, inline: true }).setTimestamp()] });
   }
 
+  if (commandName === 'logo') {
+    if (!guild) return interaction.reply({ content: "this only works in a server", ephemeral: true });
+    const url = interaction.options.getString('url');
+    const action = interaction.options.getString('action');
+    const cfg = loadConfig();
+    if (action === 'reset') {
+      delete cfg.logoUrl;
+      saveConfig(cfg);
+      return interaction.reply({ embeds: [baseEmbed().setColor(0x2C2F33).setTitle('Logo Reset')
+        .setDescription('embed logo has been reset to the default')
+        .setThumbnail(getLogoUrl()).setTimestamp()] });
+    }
+    if (!url) {
+      return interaction.reply({ embeds: [baseEmbed().setColor(0x2C2F33).setTitle('Current Logo')
+        .setDescription(`current logo: [click to view](${getLogoUrl()})`)
+        .setThumbnail(getLogoUrl()).setTimestamp()] });
+    }
+    cfg.logoUrl = url;
+    saveConfig(cfg);
+    return interaction.reply({ embeds: [baseEmbed().setColor(0x2C2F33).setTitle('Logo Updated')
+      .setDescription('embed logo has been changed')
+      .setThumbnail(url).setTimestamp()] });
+  }
+
+  if (commandName === 'name') {
+    if (!guild) return interaction.reply({ content: "this only works in a server", ephemeral: true });
+    const text = interaction.options.getString('text');
+    const action = interaction.options.getString('action');
+    const cfg = loadConfig();
+    if (action === 'reset') {
+      delete cfg.customName;
+      saveConfig(cfg);
+      return interaction.reply({ embeds: [baseEmbed().setColor(0x2C2F33).setTitle('Name Reset')
+        .setDescription(`embed name has been reset to **${client.user?.username || 'Bot'}**`).setTimestamp()] });
+    }
+    if (!text) {
+      return interaction.reply({ embeds: [baseEmbed().setColor(0x2C2F33).setTitle('Current Name')
+        .setDescription(`current embed name: **${getBotName()}**`).setTimestamp()] });
+    }
+    cfg.customName = text;
+    saveConfig(cfg);
+    return interaction.reply({ embeds: [baseEmbed().setColor(0x2C2F33).setTitle('Name Updated')
+      .setDescription(`embed name changed to **${text}**`).setTimestamp()] });
+  }
+
   if (commandName === 'group') {
     await interaction.deferReply();
     const username = interaction.options.getString('username');
@@ -3183,7 +3239,7 @@ client.on('interactionCreate', async interaction => {
     const boosts     = guild.premiumSubscriptionCount ?? 0;
     const tier       = guild.premiumTier;
     return interaction.reply({ embeds: [infoEmbed(guild.name)
-      .setThumbnail(guild.iconURL({ size: 256 }) ?? LOGO_URL)
+      .setThumbnail(guild.iconURL({ size: 256 }) ?? getLogoUrl())
       .addFields(
         { name: 'owner',    value: owner ? `<@${owner.id}>` : 'unknown',         inline: true },
         { name: 'members',  value: `${guild.memberCount}`,                        inline: true },
@@ -3242,10 +3298,10 @@ client.on('interactionCreate', async interaction => {
     const members = guild.members.cache.filter(m => m.roles.cache.has(role.id)).size;
     return interaction.reply({ embeds: [new EmbedBuilder()
       .setColor(role.color || 0x2B2D31)
-      .setAuthor({ name: getBotName(), iconURL: LOGO_URL })
+      .setAuthor({ name: getBotName(), iconURL: getLogoUrl() })
       .setTitle(role.name)
       .setTimestamp()
-      .setFooter({ text: getBotName(), iconURL: LOGO_URL })
+      .setFooter({ text: getBotName(), iconURL: getLogoUrl() })
       .addFields(
         { name: 'id',        value: role.id,                                          inline: true },
         { name: 'color',     value: role.hexColor,                                    inline: true },
@@ -3763,7 +3819,7 @@ client.on('interactionCreate', async interaction => {
       const e = baseEmbed().setColor(0x2C2F33)
         .setTitle(i === 0 ? `Members with ${role.name}` : `Members with ${role.name} (cont.)`)
         .setDescription(chunks[i])
-        .setFooter({ text: `${members.size} total member${members.size !== 1 ? 's' : ''}`, iconURL: LOGO_URL });
+        .setFooter({ text: `${members.size} total member${members.size !== 1 ? 's' : ''}`, iconURL: getLogoUrl() });
       if (i === 0) await interaction.editReply({ embeds: [e] });
       else await interaction.followUp({ embeds: [e] });
     }
@@ -3943,9 +3999,9 @@ client.on('interactionCreate', async interaction => {
       }
     } catch {}
 
-    const attendEmbed = new EmbedBuilder().setColor(0x2C2F33).setTitle('registered user joined this raid').setAuthor({ name: getBotName(), iconURL: LOGO_URL })
+    const attendEmbed = new EmbedBuilder().setColor(0x2C2F33).setTitle('registered user joined this raid').setAuthor({ name: getBotName(), iconURL: getLogoUrl() })
       .addFields({ name: 'Discord', value: `${targetMember}`, inline: false }, { name: 'Roblox', value: `\`${roblox}\``, inline: false })
-      .setTimestamp().setFooter({ text: getBotName(), iconURL: LOGO_URL });
+      .setTimestamp().setFooter({ text: getBotName(), iconURL: getLogoUrl() });
     if (attendAvatarUrl) attendEmbed.setThumbnail(attendAvatarUrl);
     await queueChannel.send({ embeds: [attendEmbed] });
     addRaidStat(guild.id, targetMember.id);
@@ -4052,9 +4108,9 @@ client.on('interactionCreate', async interaction => {
           avatarUrl = avatarData.data?.[0]?.imageUrl ?? null;
         } catch {}
         const rcAttendEmbed = new EmbedBuilder().setColor(0x2C2F33).setTitle('registered user joined this raid')
-          .setAuthor({ name: getBotName(), iconURL: LOGO_URL })
+          .setAuthor({ name: getBotName(), iconURL: getLogoUrl() })
           .addFields({ name: 'Discord', value: `<@${user.id}>`, inline: false }, { name: 'Roblox', value: `\`${userVerify.robloxName}\``, inline: false })
-          .setTimestamp().setFooter({ text: `roll call • ${getBotName()}`, iconURL: LOGO_URL });
+          .setTimestamp().setFooter({ text: `roll call • ${getBotName()}`, iconURL: getLogoUrl() });
         if (avatarUrl) rcAttendEmbed.setThumbnail(avatarUrl);
         if (queueChannel) { await queueChannel.send({ embeds: [rcAttendEmbed] }); addRaidStat(guild.id, user.id); }
         logged++;
@@ -4121,7 +4177,7 @@ client.on('interactionCreate', async interaction => {
 
       return interaction.editReply({ embeds: [baseEmbed().setColor(0x2C2F33)
         .setTitle('Registration Successful')
-        .setThumbnail(avatarUrl ?? LOGO_URL)
+        .setThumbnail(avatarUrl ?? getLogoUrl())
         .setDescription(`<@${discordId}> is now registered as **${robloxUser.name}**`)
         .addFields(
           { name: 'Discord',       value: `<@${discordId}>`, inline: true },
@@ -4181,7 +4237,7 @@ client.on('interactionCreate', async interaction => {
     const lines = entries.map(([discordId, { robloxName, robloxId }]) => `<@${discordId}> → [\`${robloxName}\`](https://www.roblox.com/users/${robloxId}/profile)`);
     const PAGE_SIZE = 20; const pages = []; for (let i = 0; i < lines.length; i += PAGE_SIZE) pages.push(lines.slice(i, i + PAGE_SIZE));
     const totalPages = pages.length;
-    const buildPage = (idx) => baseEmbed().setColor(0x2C2F33).setTitle(`Verified Accounts [${entries.length}]`).setDescription(pages[idx].join('\n')).setFooter({ text: `Page ${idx + 1} of ${totalPages} • ${getBotName()}`, iconURL: LOGO_URL });
+    const buildPage = (idx) => baseEmbed().setColor(0x2C2F33).setTitle(`Verified Accounts [${entries.length}]`).setDescription(pages[idx].join('\n')).setFooter({ text: `Page ${idx + 1} of ${totalPages} • ${getBotName()}`, iconURL: getLogoUrl() });
     const buildRow = (idx) => new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId(`rlist_${idx - 1}`).setLabel('‹ Back').setStyle(ButtonStyle.Secondary).setDisabled(idx === 0),
       new ButtonBuilder().setCustomId(`rlist_${idx + 1}`).setLabel('Next ›').setStyle(ButtonStyle.Secondary).setDisabled(idx === totalPages - 1)
@@ -4230,7 +4286,7 @@ client.on('interactionCreate', async interaction => {
     const embed = baseEmbed().setColor(0x2C2F33)
       .setTitle(`Registered Members (${entries.length})`)
       .setDescription(pages[0])
-      .setFooter({ text: `page 1 of ${pages.length} • ${entries.length} registered member${entries.length !== 1 ? 's' : ''}`, iconURL: LOGO_URL })
+      .setFooter({ text: `page 1 of ${pages.length} • ${entries.length} registered member${entries.length !== 1 ? 's' : ''}`, iconURL: getLogoUrl() })
       .setTimestamp();
     if (pages.length === 1) return interaction.editReply({ embeds: [embed], files: [exportAttachment] });
     let page = 0;
@@ -4247,7 +4303,7 @@ client.on('interactionCreate', async interaction => {
       const updEmbed = baseEmbed().setColor(0x2C2F33)
         .setTitle(`Registered Members (${entries.length})`)
         .setDescription(pages[page])
-        .setFooter({ text: `page ${page + 1} of ${pages.length} • ${entries.length} registered member${entries.length !== 1 ? 's' : ''}`, iconURL: LOGO_URL })
+        .setFooter({ text: `page ${page + 1} of ${pages.length} • ${entries.length} registered member${entries.length !== 1 ? 's' : ''}`, iconURL: getLogoUrl() })
         .setTimestamp();
       const updRow = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('rfile_prev').setLabel('◀').setStyle(ButtonStyle.Secondary).setDisabled(page === 0),
@@ -4357,9 +4413,9 @@ client.on('interactionCreate', async interaction => {
             ingameAvatarUrl = avatarData.data?.[0]?.imageUrl ?? null;
           } catch {}
           const ingameEmbed = new EmbedBuilder().setColor(0x2C2F33).setTitle('registered user joined this raid')
-            .setAuthor({ name: getBotName(), iconURL: LOGO_URL })
+            .setAuthor({ name: getBotName(), iconURL: getLogoUrl() })
             .addFields({ name: 'Discord', value: `<@${discordId}>`, inline: false }, { name: 'Roblox', value: `\`${robloxName}\``, inline: false })
-            .setTimestamp().setFooter({ text: getBotName(), iconURL: LOGO_URL });
+            .setTimestamp().setFooter({ text: getBotName(), iconURL: getLogoUrl() });
           if (ingameAvatarUrl) ingameEmbed.setThumbnail(ingameAvatarUrl);
           await queueChannel.send({ embeds: [ingameEmbed] });
           addRaidStat(guild.id, discordId);
@@ -4372,9 +4428,9 @@ client.on('interactionCreate', async interaction => {
             ingameAvatarUrl = avatarData.data?.[0]?.imageUrl ?? null;
           } catch {}
           const unregEmbed = new EmbedBuilder().setColor(0x2C2F33).setTitle('unregistered user joined this raid')
-            .setAuthor({ name: getBotName(), iconURL: LOGO_URL })
+            .setAuthor({ name: getBotName(), iconURL: getLogoUrl() })
             .addFields({ name: 'Roblox', value: `[\`${robloxName}\`](https://www.roblox.com/users/${robloxId}/profile)`, inline: false }, { name: 'Status', value: 'not mverify\'d', inline: false })
-            .setTimestamp().setFooter({ text: getBotName(), iconURL: LOGO_URL });
+            .setTimestamp().setFooter({ text: getBotName(), iconURL: getLogoUrl() });
           if (ingameAvatarUrl) unregEmbed.setThumbnail(ingameAvatarUrl);
           await queueChannel.send({ embeds: [unregEmbed] });
           await new Promise(r => setTimeout(r, 300));
@@ -4522,7 +4578,7 @@ client.on('interactionCreate', async interaction => {
     rankupData[guild.id].roles = collectedIds;
     saveRankup(rankupData);
     const lines = collectedIds.map((id, i) => `**${i + 1}.** <@&${id}>`).join('\n');
-    return interaction.reply({ embeds: [baseEmbed().setColor(0x2C2F33).setTitle('Rank Ladder Set').setDescription(lines).setFooter({ text: `${collectedIds.length} rank${collectedIds.length !== 1 ? 's' : ''} configured • lowest → highest`, iconURL: LOGO_URL }).setTimestamp()] });
+    return interaction.reply({ embeds: [baseEmbed().setColor(0x2C2F33).setTitle('Rank Ladder Set').setDescription(lines).setFooter({ text: `${collectedIds.length} rank${collectedIds.length !== 1 ? 's' : ''} configured • lowest → highest`, iconURL: getLogoUrl() }).setTimestamp()] });
   }
 
   // ── fileroles ────────────────────────────────────────────────────────────
@@ -4542,7 +4598,7 @@ client.on('interactionCreate', async interaction => {
     return interaction.editReply({
       embeds: [baseEmbed().setColor(0x2C2F33).setTitle(`Rank Ladder — ${guild.name}`)
         .setDescription(lines)
-        .setFooter({ text: `${rows.length} rank${rows.length !== 1 ? 's' : ''} • lowest → highest`, iconURL: LOGO_URL })
+        .setFooter({ text: `${rows.length} rank${rows.length !== 1 ? 's' : ''} • lowest → highest`, iconURL: getLogoUrl() })
         .setTimestamp()],
       files: [attachment]
     });
@@ -4764,7 +4820,7 @@ client.on('messageCreate', async message => {
 
   if (command === 'about') {
     return message.reply({ embeds: [baseEmbed().setColor(0x2C2F33).setTitle(`About ${client.user.username}`)
-      .setDescription(`A custom Discord bot built for **/fraid**.\n\nUse \`${prefix}help\` or \`/help\` to see all commands.`)
+      .setDescription(`A custom Discord bot built for **${getBotName()}**.\n\nUse \`${prefix}help\` or \`/help\` to see all commands.`)
       .addFields(
         { name: 'servers', value: `${client.guilds.cache.size}`, inline: true },
         { name: 'uptime', value: `<t:${Math.floor((Date.now() - client.uptime) / 1000)}:R>`, inline: true }
@@ -5239,7 +5295,7 @@ client.on('messageCreate', async message => {
       const result = await rankRobloxUser(robloxUser, roleId);
       const embed  = baseEmbed().setTitle('got em ranked').setColor(0x2C2F33)
         .addFields({ name: 'user', value: result.displayName, inline: true }, { name: 'tag', value: tagName, inline: true }, { name: 'role id', value: roleId, inline: true })
-        .setFooter({ text: `ranked by ${message.author.tag}`, iconURL: LOGO_URL }).setTimestamp();
+        .setFooter({ text: `ranked by ${message.author.tag}`, iconURL: getLogoUrl() }).setTimestamp();
       if (result.avatarUrl) embed.setThumbnail(result.avatarUrl);
       await status.edit({ content: '', embeds: [embed] });
       // track who got this tag so striptag can find them later
@@ -5250,7 +5306,7 @@ client.on('messageCreate', async message => {
       const logEmbed = baseEmbed().setTitle('rank log').setColor(0x2C2F33)
         .addFields({ name: 'user', value: result.displayName, inline: true }, { name: 'tag', value: tagName, inline: true }, { name: 'role id', value: roleId, inline: true },
           { name: 'ranked by', value: `<@${message.author.id}>`, inline: true }, { name: 'channel', value: `<#${message.channel.id}>`, inline: true })
-        .setFooter({ text: `roblox id: ${result.userId}`, iconURL: LOGO_URL }).setTimestamp();
+        .setFooter({ text: `roblox id: ${result.userId}`, iconURL: getLogoUrl() }).setTimestamp();
       if (result.avatarUrl) logEmbed.setThumbnail(result.avatarUrl);
       await sendLog(message.guild, logEmbed);
     } catch (err) { await status.edit({ content: '', embeds: [baseEmbed().setColor(0x2C2F33).setDescription(`couldn't rank them - ${err.message}`)] }); }
@@ -5285,7 +5341,7 @@ client.on('messageCreate', async message => {
     );
     return message.reply({ embeds: [baseEmbed().setColor(0x2C2F33).setTitle('confirm striptag')
       .setDescription(`are you sure you want to strip **${members.length}** user${members.length !== 1 ? 's' : ''} from tag **${tagName}** and rank them all to rank 1?\n\n**Users:** ${members.join(', ')}`)
-      .setFooter({ text: 'this confirmation expires in 60 seconds', iconURL: LOGO_URL })], components: [confirmRow] });
+      .setFooter({ text: 'this confirmation expires in 60 seconds', iconURL: getLogoUrl() })], components: [confirmRow] });
   }
 
   if (command === 'tagstrip') {
@@ -5760,7 +5816,7 @@ client.on('messageCreate', async message => {
     const boosts     = message.guild.premiumSubscriptionCount ?? 0;
     const tier       = message.guild.premiumTier;
     return message.reply({ embeds: [infoEmbed(message.guild.name)
-      .setThumbnail(message.guild.iconURL({ size: 256 }) ?? LOGO_URL)
+      .setThumbnail(message.guild.iconURL({ size: 256 }) ?? getLogoUrl())
       .addFields(
         { name: 'owner',   value: owner ? `<@${owner.id}>` : 'unknown',                               inline: true },
         { name: 'members', value: `${message.guild.memberCount}`,                                      inline: true },
@@ -5940,10 +5996,10 @@ client.on('messageCreate', async message => {
     const members = message.guild.members.cache.filter(m => m.roles.cache.has(role.id)).size;
     return message.reply({ embeds: [new EmbedBuilder()
       .setColor(role.color || 0x2B2D31)
-      .setAuthor({ name: getBotName(), iconURL: LOGO_URL })
+      .setAuthor({ name: getBotName(), iconURL: getLogoUrl() })
       .setTitle(role.name)
       .setTimestamp()
-      .setFooter({ text: getBotName(), iconURL: LOGO_URL })
+      .setFooter({ text: getBotName(), iconURL: getLogoUrl() })
       .addFields(
         { name: 'id',          value: role.id,                                              inline: true },
         { name: 'color',       value: role.hexColor,                                        inline: true },
@@ -5968,6 +6024,52 @@ client.on('messageCreate', async message => {
     saveConfig(cfg);
     return message.reply({ embeds: [baseEmbed().setColor(0x2C2F33).setTitle('Config Updated')
       .addFields({ name: setting, value: value, inline: true }).setTimestamp()] });
+  }
+
+  // ── .logo ──────────────────────────────────────────────────────────────────────
+  if (command === 'logo') {
+    if (!message.guild) return;
+    const action = args[0]?.toLowerCase();
+    const cfg = loadConfig();
+    if (action === 'reset') {
+      delete cfg.logoUrl;
+      saveConfig(cfg);
+      return message.reply({ embeds: [baseEmbed().setColor(0x2C2F33).setTitle('Logo Reset')
+        .setDescription('embed logo has been reset to the default')
+        .setThumbnail(getLogoUrl()).setTimestamp()] });
+    }
+    if (!args[0]) {
+      return message.reply({ embeds: [baseEmbed().setColor(0x2C2F33).setTitle('Current Logo')
+        .setDescription(`current logo: [click to view](${getLogoUrl()})`)
+        .setThumbnail(getLogoUrl()).setTimestamp()] });
+    }
+    cfg.logoUrl = args[0];
+    saveConfig(cfg);
+    return message.reply({ embeds: [baseEmbed().setColor(0x2C2F33).setTitle('Logo Updated')
+      .setDescription('embed logo has been changed')
+      .setThumbnail(args[0]).setTimestamp()] });
+  }
+
+  // ── .name ──────────────────────────────────────────────────────────────────────
+  if (command === 'name') {
+    if (!message.guild) return;
+    const action = args[0]?.toLowerCase();
+    const cfg = loadConfig();
+    if (action === 'reset') {
+      delete cfg.customName;
+      saveConfig(cfg);
+      return message.reply({ embeds: [baseEmbed().setColor(0x2C2F33).setTitle('Name Reset')
+        .setDescription(`embed name has been reset to **${client.user?.username || 'Bot'}**`).setTimestamp()] });
+    }
+    const newName = args.join(' ');
+    if (!newName) {
+      return message.reply({ embeds: [baseEmbed().setColor(0x2C2F33).setTitle('Current Name')
+        .setDescription(`current embed name: **${getBotName()}**`).setTimestamp()] });
+    }
+    cfg.customName = newName;
+    saveConfig(cfg);
+    return message.reply({ embeds: [baseEmbed().setColor(0x2C2F33).setTitle('Name Updated')
+      .setDescription(`embed name changed to **${newName}**`).setTimestamp()] });
   }
 
   // ── .vanityset ────────────────────────────────────────────────────────────────
@@ -6134,7 +6236,7 @@ client.on('messageCreate', async message => {
       const e = baseEmbed().setColor(0x2C2F33)
         .setTitle(i === 0 ? `Members with ${role.name}` : `Members with ${role.name} (cont.)`)
         .setDescription(chunks[i])
-        .setFooter({ text: `${members.size} total member${members.size !== 1 ? 's' : ''}`, iconURL: LOGO_URL });
+        .setFooter({ text: `${members.size} total member${members.size !== 1 ? 's' : ''}`, iconURL: getLogoUrl() });
       await message.reply({ embeds: [e] });
     }
     return;
@@ -6430,7 +6532,7 @@ client.on('messageCreate', async message => {
     const lines = collectedIds.map((id, i) => `**${i + 1}.** <@&${id}>`).join('\n');
     return message.reply({ embeds: [baseEmbed().setColor(0x2C2F33).setTitle('Rank Ladder Set')
       .setDescription(lines)
-      .setFooter({ text: `${collectedIds.length} rank${collectedIds.length !== 1 ? 's' : ''} configured • lowest → highest`, iconURL: LOGO_URL })
+      .setFooter({ text: `${collectedIds.length} rank${collectedIds.length !== 1 ? 's' : ''} configured • lowest → highest`, iconURL: getLogoUrl() })
       .setTimestamp()] });
   }
 
@@ -6451,7 +6553,7 @@ client.on('messageCreate', async message => {
     return message.reply({
       embeds: [baseEmbed().setColor(0x2C2F33).setTitle(`Rank Ladder — ${message.guild.name}`)
         .setDescription(lines)
-        .setFooter({ text: `${rows.length} rank${rows.length !== 1 ? 's' : ''} • lowest → highest`, iconURL: LOGO_URL })
+        .setFooter({ text: `${rows.length} rank${rows.length !== 1 ? 's' : ''} • lowest → highest`, iconURL: getLogoUrl() })
         .setTimestamp()],
       files: [attachment]
     });
@@ -6480,7 +6582,7 @@ client.on('messageCreate', async message => {
     const makeEmbed = () => baseEmbed().setColor(0x2C2F33)
       .setTitle(`Registered Members (${entries.length})`)
       .setDescription(pages[page])
-      .setFooter({ text: `page ${page + 1} of ${pages.length} • ${entries.length} registered member${entries.length !== 1 ? 's' : ''}`, iconURL: LOGO_URL })
+      .setFooter({ text: `page ${page + 1} of ${pages.length} • ${entries.length} registered member${entries.length !== 1 ? 's' : ''}`, iconURL: getLogoUrl() })
       .setTimestamp();
     const makeRow = () => new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId('rfile_prev').setLabel('◀').setStyle(ButtonStyle.Secondary).setDisabled(page === 0),
@@ -6598,7 +6700,7 @@ client.on('messageCreate', async message => {
 
       return message.reply({ embeds: [baseEmbed().setColor(0x2C2F33)
         .setTitle('Registration Successful')
-        .setThumbnail(avatarUrl ?? LOGO_URL)
+        .setThumbnail(avatarUrl ?? getLogoUrl())
         .setDescription(`You are now registered as **${robloxUser.name}**`)
         .addFields(
           { name: 'Discord', value: `<@${message.author.id}>`, inline: true },
@@ -6656,7 +6758,7 @@ client.on('messageCreate', async message => {
 
       return message.reply({ embeds: [baseEmbed().setColor(0x2C2F33)
         .setTitle('Registration Successful')
-        .setThumbnail(avatarUrl ?? LOGO_URL)
+        .setThumbnail(avatarUrl ?? getLogoUrl())
         .setDescription(`<@${discordId}> is now registered as **${robloxUser.name}**`)
         .addFields(
           { name: 'Discord',       value: `<@${discordId}>`, inline: true },
@@ -6743,7 +6845,7 @@ client.on('messageCreate', async message => {
     const buildPage  = (idx) => baseEmbed().setColor(0x2C2F33)
       .setTitle(`Verified Accounts [${entries.length}]`)
       .setDescription(pages[idx].join('\n'))
-      .setFooter({ text: `Page ${idx + 1} of ${totalPages} • ${getBotName()}`, iconURL: LOGO_URL });
+      .setFooter({ text: `Page ${idx + 1} of ${totalPages} • ${getBotName()}`, iconURL: getLogoUrl() });
 
     if (totalPages === 1) {
       return message.reply({ embeds: [buildPage(0)] });
@@ -6920,13 +7022,13 @@ client.on('messageCreate', async message => {
       const attendEmbed = new EmbedBuilder()
         .setColor(0x2C2F33)
         .setTitle('registered user joined this raid')
-        .setAuthor({ name: getBotName(), iconURL: LOGO_URL })
+        .setAuthor({ name: getBotName(), iconURL: getLogoUrl() })
         .addFields(
           { name: 'Discord', value: `${member}`, inline: false },
           { name: 'Roblox',  value: `\`${roblox}\``, inline: false }
         )
         .setTimestamp()
-        .setFooter({ text: getBotName(), iconURL: LOGO_URL });
+        .setFooter({ text: getBotName(), iconURL: getLogoUrl() });
       if (prefixAttendAvatarUrl) attendEmbed.setThumbnail(prefixAttendAvatarUrl);
       await queueChannel.send({ embeds: [attendEmbed] });
     }
@@ -7021,9 +7123,9 @@ client.on('messageCreate', async message => {
           avatarUrl = avatarData.data?.[0]?.imageUrl ?? null;
         } catch {}
         const rcAttendEmbed = new EmbedBuilder().setColor(0x2C2F33).setTitle('registered user joined this raid')
-          .setAuthor({ name: getBotName(), iconURL: LOGO_URL })
+          .setAuthor({ name: getBotName(), iconURL: getLogoUrl() })
           .addFields({ name: 'Discord', value: `<@${user.id}>`, inline: false }, { name: 'Roblox', value: `\`${userVerify.robloxName}\``, inline: false })
-          .setTimestamp().setFooter({ text: `roll call • ${getBotName()}`, iconURL: LOGO_URL });
+          .setTimestamp().setFooter({ text: `roll call • ${getBotName()}`, iconURL: getLogoUrl() });
         if (avatarUrl) rcAttendEmbed.setThumbnail(avatarUrl);
         if (queueChannel) { await queueChannel.send({ embeds: [rcAttendEmbed] }); addRaidStat(message.guild.id, user.id); }
         logged++;
@@ -7221,9 +7323,9 @@ client.on('messageCreate', async message => {
             ingameAvatarUrl = avatarData.data?.[0]?.imageUrl ?? null;
           } catch {}
           const ingameEmbed = new EmbedBuilder().setColor(0x2C2F33).setTitle('registered user joined this raid')
-            .setAuthor({ name: getBotName(), iconURL: LOGO_URL })
+            .setAuthor({ name: getBotName(), iconURL: getLogoUrl() })
             .addFields({ name: 'Discord', value: `<@${discordId}>`, inline: false }, { name: 'Roblox', value: `\`${robloxName}\``, inline: false })
-            .setTimestamp().setFooter({ text: getBotName(), iconURL: LOGO_URL });
+            .setTimestamp().setFooter({ text: getBotName(), iconURL: getLogoUrl() });
           if (ingameAvatarUrl) ingameEmbed.setThumbnail(ingameAvatarUrl);
           await queueChannel.send({ embeds: [ingameEmbed] });
           await new Promise(r => setTimeout(r, 300));
@@ -7235,9 +7337,9 @@ client.on('messageCreate', async message => {
             ingameAvatarUrl = avatarData.data?.[0]?.imageUrl ?? null;
           } catch {}
           const unregEmbed = new EmbedBuilder().setColor(0x2C2F33).setTitle('unregistered user joined this raid')
-            .setAuthor({ name: getBotName(), iconURL: LOGO_URL })
+            .setAuthor({ name: getBotName(), iconURL: getLogoUrl() })
             .addFields({ name: 'Roblox', value: `[\`${robloxName}\`](https://www.roblox.com/users/${robloxId}/profile)`, inline: false }, { name: 'Status', value: 'not mverify\'d', inline: false })
-            .setTimestamp().setFooter({ text: getBotName(), iconURL: LOGO_URL });
+            .setTimestamp().setFooter({ text: getBotName(), iconURL: getLogoUrl() });
           if (ingameAvatarUrl) unregEmbed.setThumbnail(ingameAvatarUrl);
           await queueChannel.send({ embeds: [unregEmbed] });
           await new Promise(r => setTimeout(r, 300));
@@ -7390,13 +7492,13 @@ http.createServer(async (req, res) => {
       const attendEmbed = new EmbedBuilder()
         .setColor(0x2C2F33)
         .setTitle('registered user joined this raid')
-        .setAuthor({ name: getBotName(), iconURL: LOGO_URL })
+        .setAuthor({ name: getBotName(), iconURL: getLogoUrl() })
         .addFields(
           { name: 'Discord', value: discordDisplay,               inline: false },
           { name: 'Roblox',  value: `\`${robloxUsername}\``, inline: false }
         )
         .setTimestamp()
-        .setFooter({ text: getBotName(), iconURL: LOGO_URL });
+        .setFooter({ text: getBotName(), iconURL: getLogoUrl() });
       if (httpAvatarUrl) attendEmbed.setThumbnail(httpAvatarUrl);
 
       await queueChannel.send({ embeds: [attendEmbed] });
