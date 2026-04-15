@@ -882,8 +882,15 @@ async function rankRobloxUser(robloxUsername, roleId) {
   const csrfRes   = await fetch('https://auth.roblox.com/v2/logout', {
     method: 'POST', headers: { Cookie: `.ROBLOSECURITY=${cookie}` }
   });
+  if (!csrfRes.ok && csrfRes.status !== 403) {
+    console.error(`CSRF token fetch failed with HTTP ${csrfRes.status}`);
+    throw new Error(`Could not get CSRF token — ROBLOX_COOKIE may be invalid or expired (HTTP ${csrfRes.status}).`);
+  }
   const csrfToken = csrfRes.headers.get('x-csrf-token');
-  if (!csrfToken) throw new Error('Could not get CSRF token. Check your ROBLOX_COOKIE.');
+  if (typeof csrfToken !== 'string' || csrfToken.trim() === '') {
+    console.error(`CSRF token header missing on HTTP ${csrfRes.status} response`);
+    throw new Error('Could not get CSRF token. Check your ROBLOX_COOKIE.');
+  }
 
   const rankRes = await fetch(`https://groups.roblox.com/v1/groups/${groupId}/users/${userId}`, {
     method: 'PATCH',
